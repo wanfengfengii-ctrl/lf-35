@@ -103,8 +103,10 @@ class WorkOrderDialog(QDialog):
         self.arrive_time_edit = QDateTimeEdit()
         self.arrive_time_edit.setCalendarPopup(True)
         self.arrive_time_edit.setDisplayFormat("yyyy-MM-dd HH:mm")
-        self.arrive_time_edit.setDateTime(QDateTime.currentDateTime())
-        self.arrive_time_edit.setSpecialValueText(" ")
+        self.arrive_time_edit.setMinimumDateTime(QDateTime.fromString("1900-01-01 00:00", "yyyy-MM-dd HH:mm"))
+        self.arrive_time_edit.setDateTime(self.arrive_time_edit.minimumDateTime())
+        self.arrive_time_edit.setSpecialValueText("未到场")
+        self.arrive_time_edit.setEnabled(False)
         time_row.addWidget(QLabel("实际到场时间:"))
         time_row.addWidget(self.arrive_time_edit)
         layout.addRow("时间安排:", time_row)
@@ -113,6 +115,7 @@ class WorkOrderDialog(QDialog):
         for status in WORK_ORDER_STATUSES:
             self.status_combo.addItem(status, status)
         self.status_combo.setCurrentText("待处理")
+        self.status_combo.currentIndexChanged.connect(self._on_status_changed)
         layout.addRow("工单状态:", self.status_combo)
 
         self.desc_edit = QTextEdit()
@@ -156,12 +159,17 @@ class WorkOrderDialog(QDialog):
 
     def _on_area_changed(self):
         area_id = self.area_combo.currentData()
-        self.point_combo.clear()
-        self.point_combo.addItem("请选择滴水点", None)
-        if area_id:
-            points = self.db.get_drip_points_by_area(area_id)
-            for p in points:
-                self.point_combo.addItem(f"{p['code']} - {p['name']}", p["id"])
+        self._refresh_point_combo(area_id)
+
+    def _on_status_changed(self):
+        status = self.status_combo.currentData()
+        if status and status in ("处理中", "待复检", "已完成", "已关闭"):
+            self.arrive_time_edit.setEnabled(True)
+            if self.arrive_time_edit.dateTime() == self.arrive_time_edit.minimumDateTime():
+                self.arrive_time_edit.setDateTime(QDateTime.currentDateTime())
+        else:
+            self.arrive_time_edit.setEnabled(False)
+            self.arrive_time_edit.setDateTime(self.arrive_time_edit.minimumDateTime())
 
     def _load_data(self):
         if not self.order_data:
@@ -169,16 +177,24 @@ class WorkOrderDialog(QDialog):
         self.title_edit.setText(self.order_data.get("title", ""))
 
         area_id = self.order_data.get("area_id")
+        point_id = self.order_data.get("drip_point_id")
+
+        if not area_id and point_id:
+            pt = self.db.get_drip_point(point_id)
+            if pt and pt.get("area_id"):
+                area_id = pt["area_id"]
+
+        self.area_combo.blockSignals(True)
         if area_id:
             idx = self.area_combo.findData(area_id)
             if idx >= 0:
                 self.area_combo.setCurrentIndex(idx)
-
-        point_id = self.order_data.get("drip_point_id")
-        if point_id:
-            idx = self.point_combo.findData(point_id)
-            if idx >= 0:
-                self.point_combo.setCurrentIndex(idx)
+                self._refresh_point_combo(area_id)
+                if point_id:
+                    p_idx = self.point_combo.findData(point_id)
+                    if p_idx >= 0:
+                        self.point_combo.setCurrentIndex(p_idx)
+        self.area_combo.blockSignals(False)
 
         anomaly_type = self.order_data.get("anomaly_type", "")
         type_map = {v: k for k, v in ANOMALY_TYPES.items()}
@@ -210,17 +226,31 @@ class WorkOrderDialog(QDialog):
             dt = QDateTime.fromString(arrive_time, "yyyy-MM-dd HH:mm:ss")
             if dt.isValid():
                 self.arrive_time_edit.setDateTime(dt)
+                self.arrive_time_edit.setEnabled(True)
+        else:
+            self.arrive_time_edit.setDateTime(self.arrive_time_edit.minimumDateTime())
+            self.arrive_time_edit.setEnabled(False)
 
+        self.status_combo.blockSignals(True)
         status = self.order_data.get("status", "待处理")
         idx = self.status_combo.findData(status)
         if idx >= 0:
             self.status_combo.setCurrentIndex(idx)
+        self.status_combo.blockSignals(False)
 
         self.desc_edit.setPlainText(self.order_data.get("description", ""))
         self.inspection_edit.setPlainText(self.order_data.get("inspection_content", ""))
         self.measures_edit.setPlainText(self.order_data.get("measures", ""))
         self.recheck_edit.setPlainText(self.order_data.get("recheck_conclusion", ""))
         self.notes_edit.setPlainText(self.order_data.get("notes", ""))
+
+    def _refresh_point_combo(self, area_id):
+        self.point_combo.clear()
+        self.point_combo.addItem("请选择滴水点", None)
+        if area_id:
+            points = self.db.get_drip_points_by_area(area_id)
+            for p in points:
+                self.point_combo.addItem(f"{p['code']} - {p['name']}", p["id"])
 
     def _on_ok(self):
         title = self.title_edit.text().strip()
@@ -233,7 +263,8 @@ class WorkOrderDialog(QDialog):
         type_key = self.type_combo.currentData()
         type_name = ANOMALY_TYPES.get(type_key, "") if type_key else ""
         plan_time = self.plan_time_edit.dateTime().toString("yyyy-MM-dd HH:mm:ss")
-        arrive_time = self.arrive_time_edit.dateTime().toString("yyyy-MM-dd HH:mm:ss")
+        arrive_dt = self.arrive_time_edit.dateTime()
+        arrive_time = "" if arrive_dt == self.arrive_time_edit.minimumDateTime() else arrive_dt.toString("yyyy-MM-dd HH:mm:ss")
 
         return {
             "title": self.title_edit.text().strip(),
@@ -400,8 +431,10 @@ class WorkOrderDetailDialog(QDialog):
         self.upload_btn.clicked.connect(self._on_upload)
         self.view_btn = QPushButton("打开文件")
         self.view_btn.clicked.connect(self._on_view_attachment)
+        self.view_btn.setEnabled(False)
         self.del_attach_btn = QPushButton("删除附件")
         self.del_attach_btn.clicked.connect(self._on_delete_attachment)
+        self.del_attach_btn.setEnabled(False)
         attach_btn_row.addWidget(self.upload_btn)
         attach_btn_row.addWidget(self.view_btn)
         attach_btn_row.addWidget(self.del_attach_btn)
@@ -409,6 +442,7 @@ class WorkOrderDetailDialog(QDialog):
         attach_layout.addLayout(attach_btn_row)
 
         self.attach_list = QListWidget()
+        self.attach_list.itemSelectionChanged.connect(self._on_attach_selection_changed)
         attach_layout.addWidget(self.attach_list)
 
         self.tabs.addTab(attach_tab, "附件")
@@ -481,6 +515,8 @@ class WorkOrderDetailDialog(QDialog):
 
     def _load_attachments(self):
         self.attach_list.clear()
+        self.view_btn.setEnabled(False)
+        self.del_attach_btn.setEnabled(False)
         attachments = self.db.get_attachments(self.order_id)
         for att in attachments:
             item = QListWidgetItem(f"📎 {att['file_name']} ({self._format_size(att.get('file_size', 0))}) - {att.get('uploaded_at', '')}")
@@ -496,6 +532,11 @@ class WorkOrderDetailDialog(QDialog):
             return f"{size/1024:.1f} KB"
         else:
             return f"{size/(1024*1024):.1f} MB"
+
+    def _on_attach_selection_changed(self):
+        has_selection = self.attach_list.currentItem() is not None
+        self.view_btn.setEnabled(has_selection)
+        self.del_attach_btn.setEnabled(has_selection)
 
     def _on_edit(self):
         if not self.order_id:
