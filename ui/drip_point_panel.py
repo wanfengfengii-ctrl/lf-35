@@ -191,6 +191,7 @@ class DripPointPanel(QWidget):
             if success:
                 QMessageBox.information(self, "成功", msg)
                 self.refresh()
+                self.data_changed.emit()
             else:
                 QMessageBox.warning(self, "失败", msg)
 
@@ -208,6 +209,7 @@ class DripPointPanel(QWidget):
             if success:
                 QMessageBox.information(self, "成功", msg)
                 self.refresh()
+                self.data_changed.emit()
             else:
                 QMessageBox.warning(self, "失败", msg)
 
@@ -239,6 +241,7 @@ class DripPointPanel(QWidget):
                     if success:
                         QMessageBox.information(self, "成功", msg)
                         self.refresh()
+                        self.data_changed.emit()
                     else:
                         QMessageBox.warning(self, "失败", msg)
             return
@@ -255,6 +258,7 @@ class DripPointPanel(QWidget):
             if success:
                 QMessageBox.information(self, "成功", msg)
                 self.refresh()
+                self.data_changed.emit()
             else:
                 QMessageBox.warning(self, "失败", msg)
 
