@@ -166,6 +166,10 @@ class QCPanel(QWidget):
         splitter.setStretchFactor(1, 1)
         main_layout.addWidget(splitter, stretch=1)
 
+    def refresh(self):
+        self.refresh_points()
+        self._refresh_history()
+
     def refresh_points(self):
         current_data = self.point_combo.currentData() if self.point_combo.count() > 0 else None
         self.point_combo.blockSignals(True)

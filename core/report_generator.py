@@ -43,16 +43,55 @@ class ReportGenerator:
                 "interval_max": 0,
             }
         
+        data_rows = []
+        for s in day_stats:
+            data_rows.append({
+                "时段": s.period,
+                "数据量": s.data_count,
+                "平均间隔(s)": round(s.avg_interval, 2),
+                "最小间隔(s)": round(s.min_interval, 2),
+                "最大间隔(s)": round(s.max_interval, 2),
+                "变异系数(%)": round(s.cv_interval, 2),
+            })
+
+        anomaly_rows = []
+        for a in anomalies:
+            anomaly_rows.append({
+                "异常类型": a["anomaly_type"],
+                "风险等级": a["risk_level"],
+                "起始时间": a["start_time"],
+                "结束时间": a.get("end_time", "-"),
+                "状态": a.get("status", "-"),
+            })
+
+        combined_data = data_rows
+        combined_data.append({})
+        combined_data.append({"时段": f"=== 异常记录 ({len(anomaly_rows)} 条) ==="})
+        combined_data.extend(anomaly_rows)
+
+        statistics_info = {
+            "滴水点编号": point.get("code", "-"),
+            "滴水点名称": point.get("name", "-"),
+            "位置": point.get("location", "-"),
+            "异常总数": len(anomalies),
+            "最高风险等级": max([a["risk_level"] for a in anomalies], default="低"),
+            "总监测天数": len(day_stats),
+        }
+
         return {
-            "report_type": "月度报告",
+            "title": f"{point.get('code', '-')} - {point.get('name', '-')} 月度监测报告",
+            "report_type": "月度监测报告",
             "report_period": f"{year}年{month}月",
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "point_info": point,
             "summary": summary,
+            "data": combined_data,
             "daily_statistics": day_stats,
             "anomalies": anomalies,
             "anomaly_count": len(anomalies),
-            "risk_level": max([a["risk_level"] for a in anomalies], default="低")
+            "risk_level": max([a["risk_level"] for a in anomalies], default="低"),
+            "statistics": statistics_info,
+            "notes": "请重点关注异常记录和变异系数大于30%的日期。",
         }
 
     @staticmethod
@@ -71,16 +110,62 @@ class ReportGenerator:
             if area:
                 area_name = f"{area['code']} - {area['name']}"
         
+        data_rows = []
+        for a in pending:
+            data_rows.append({
+                "状态": "待处理",
+                "滴水点": f"{a.get('drip_point_code', '-')} - {a.get('drip_point_name', '-')}",
+                "异常类型": a.get("anomaly_type", "-"),
+                "风险等级": a.get("risk_level", "-"),
+                "起始时间": a.get("start_time", "-"),
+                "描述": a.get("description", "")[:40],
+            })
+        for a in processing:
+            data_rows.append({
+                "状态": "处理中",
+                "滴水点": f"{a.get('drip_point_code', '-')} - {a.get('drip_point_name', '-')}",
+                "异常类型": a.get("anomaly_type", "-"),
+                "风险等级": a.get("risk_level", "-"),
+                "起始时间": a.get("start_time", "-"),
+                "描述": a.get("description", "")[:40],
+            })
+        for a in completed:
+            data_rows.append({
+                "状态": "已处理",
+                "滴水点": f"{a.get('drip_point_code', '-')} - {a.get('drip_point_name', '-')}",
+                "异常类型": a.get("anomaly_type", "-"),
+                "风险等级": a.get("risk_level", "-"),
+                "起始时间": a.get("start_time", "-"),
+                "描述": a.get("description", "")[:40],
+            })
+
+        statistics_info = {
+            "洞区范围": area_name,
+            "待处理": len(pending),
+            "处理中": len(processing),
+            "已处理": len(completed),
+            "综合风险等级": risk_assessment.overall_risk,
+            "风险评分": risk_assessment.risk_score,
+            "高风险点位": len(risk_assessment.high_risk_points),
+            "趋势": risk_assessment.trend_analysis,
+        }
+
+        recommendations_text = "\n".join([f"{i+1}. {r}" for i, r in enumerate(risk_assessment.recommendations)]) if risk_assessment.recommendations else "暂无建议"
+
         return {
+            "title": f"{area_name} 异常专项报告",
             "report_type": "异常专项报告",
             "report_period": "截至 " + datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "area_name": area_name,
+            "summary": statistics_info,
+            "data": data_rows,
             "pending_count": len(pending),
             "processing_count": len(processing),
             "completed_count": len(completed),
             "pending_anomalies": pending,
             "processing_anomalies": processing,
+            "statistics": statistics_info,
             "risk_assessment": {
                 "overall_risk": risk_assessment.overall_risk,
                 "risk_score": risk_assessment.risk_score,
@@ -88,7 +173,8 @@ class ReportGenerator:
                 "high_risk_count": len(risk_assessment.high_risk_points),
                 "trend_analysis": risk_assessment.trend_analysis,
                 "recommendations": risk_assessment.recommendations
-            }
+            },
+            "notes": recommendations_text
         }
 
     @staticmethod
@@ -114,30 +200,84 @@ class ReportGenerator:
             area_id, f"{area['code']} - {area['name']}", points_data
         )
         
+        point_results_list = [
+            {
+                "point_id": pr.point_id,
+                "point_code": pr.point_code,
+                "point_name": pr.point_name,
+                "baseline_mean": pr.baseline_mean,
+                "baseline_std": pr.baseline_std,
+                "data_count": pr.data_count,
+                "anomaly_count": pr.anomaly_count,
+                "avg_interval": pr.avg_interval,
+                "trend": pr.trend
+            }
+            for pr in joint_result.point_results
+        ]
+
+        data_rows = []
+        for pr in point_results_list:
+            data_rows.append({
+                "点位编号": pr["point_code"],
+                "点位名称": pr["point_name"],
+                "数据量": pr["data_count"],
+                "平均间隔(s)": round(pr["avg_interval"], 2) if pr["avg_interval"] else "-",
+                "异常段数": pr["anomaly_count"],
+                "趋势": pr["trend"],
+            })
+
+        correlation_rows = []
+        if joint_result.correlation_matrix:
+            correlation_rows.append({})
+            correlation_rows.append({"点位编号": "=== 相关系数矩阵 ==="})
+            points_order = list(joint_result.correlation_matrix.keys())
+            header_row = {"点位编号": "点位编号"}
+            for c in points_order:
+                header_row[c] = c
+            correlation_rows.append(header_row)
+            for p1 in points_order:
+                row_dict = {"点位编号": p1}
+                for p2 in points_order:
+                    val = joint_result.correlation_matrix[p1][p2]
+                    row_dict[p2] = round(val, 3)
+                correlation_rows.append(row_dict)
+
+        all_starts = []
+        all_ends = []
+        for pr in joint_result.point_results:
+            pd = points_data.get(pr.point_id, {}).get("data", [])
+            if pd:
+                all_starts.append(pd[0]["record_time"])
+                all_ends.append(pd[-1]["record_time"])
+        common_period_text = "-"
+        if all_starts and all_ends:
+            common_period_text = f"{min(all_starts)} 至 {max(all_ends)}"
+
+        statistics_info = {
+            "洞区": f"{area['code']} - {area['name']}",
+            "点位数量": len(points),
+            "综合风险等级": joint_result.combined_risk_level,
+            "共同时段": common_period_text,
+        }
+
+        recommendations_text = "\n".join([f"{i+1}. {r}" for i, r in enumerate(joint_result.recommendations)]) if joint_result.recommendations else "暂无建议"
+
         return {
+            "title": f"{area['code']} - {area['name']} 联合分析报告",
             "report_type": "多滴水点联合分析报告",
             "report_period": "截至 " + datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "area_info": area,
             "point_count": len(points),
+            "summary": statistics_info,
+            "data": data_rows + correlation_rows,
+            "statistics": statistics_info,
             "combined_risk_level": joint_result.combined_risk_level,
-            "point_results": [
-                {
-                    "point_id": pr.point_id,
-                    "point_code": pr.point_code,
-                    "point_name": pr.point_name,
-                    "baseline_mean": pr.baseline_mean,
-                    "baseline_std": pr.baseline_std,
-                    "data_count": pr.data_count,
-                    "anomaly_count": pr.anomaly_count,
-                    "avg_interval": pr.avg_interval,
-                    "trend": pr.trend
-                }
-                for pr in joint_result.point_results
-            ],
+            "point_results": point_results_list,
             "correlation_matrix": joint_result.correlation_matrix,
             "anomaly_summary": joint_result.anomaly_summary,
-            "recommendations": joint_result.recommendations
+            "recommendations": joint_result.recommendations,
+            "notes": recommendations_text
         }
 
     @staticmethod
@@ -269,7 +409,7 @@ class ReportGenerator:
     @staticmethod
     def get_available_report_types() -> List[Dict]:
         return [
-            {"type": "monthly", "name": "月度监测报告", "description": "按月份导出单滴水点统计报告"},
-            {"type": "anomaly", "name": "异常专项报告", "description": "导出异常处理进度与风险评估"},
-            {"type": "joint", "name": "联合分析报告", "description": "导出洞区多滴水点联合分析结果"},
+            {"key": "monthly", "name": "月度监测报告", "description": "按月份导出单滴水点统计报告"},
+            {"key": "anomaly", "name": "异常专项报告", "description": "导出异常处理进度与风险评估"},
+            {"key": "joint", "name": "联合分析报告", "description": "导出洞区多滴水点联合分析结果"},
         ]

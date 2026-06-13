@@ -104,6 +104,15 @@ class MainWindow(QMainWindow):
         chart_btn_layout.addStretch()
         chart_control_layout.addLayout(chart_btn_layout)
 
+        self.joint_area_layout = QHBoxLayout()
+        self.joint_area_layout.addWidget(QLabel("选择洞区:"))
+        self.joint_area_combo = QComboBox()
+        self.joint_area_combo.setMinimumWidth(200)
+        self.joint_area_combo.currentIndexChanged.connect(self._on_refresh_chart)
+        self.joint_area_layout.addWidget(self.joint_area_combo)
+        self.joint_area_layout.addStretch()
+        chart_control_layout.addLayout(self.joint_area_layout)
+
         self.chart_view = ChartViewWidget()
         chart_control_layout.addWidget(self.chart_view, stretch=1)
 
@@ -119,6 +128,11 @@ class MainWindow(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self._update_status()
+
+        for i in range(self.joint_area_layout.count()):
+            w = self.joint_area_layout.itemAt(i).widget()
+            if w:
+                w.hide()
 
     def _init_toolbar(self):
         toolbar = QToolBar("主工具栏")
@@ -170,6 +184,17 @@ class MainWindow(QMainWindow):
         self._on_refresh_chart()
 
     def _on_chart_type_changed(self):
+        chart_type = self.chart_type_combo.currentData()
+        if chart_type == "joint":
+            for i in range(self.joint_area_layout.count()):
+                w = self.joint_area_layout.itemAt(i).widget()
+                if w:
+                    w.show()
+        else:
+            for i in range(self.joint_area_layout.count()):
+                w = self.joint_area_layout.itemAt(i).widget()
+                if w:
+                    w.hide()
         self._on_refresh_chart()
 
     def _on_refresh_chart(self):
@@ -200,15 +225,25 @@ class MainWindow(QMainWindow):
             self.chart_view.plot_anomaly(result)
 
     def _plot_joint_analysis(self):
-        areas = self.db.get_all_cave_areas()
-        if not areas:
+        area_id = self.joint_area_combo.currentData()
+        if not area_id:
             self.chart_view.clear()
             return
 
-        area = areas[0]
-        points = self.db.get_drip_points_by_area(area["id"])
+        area = None
+        for a in self.db.get_all_cave_areas():
+            if a["id"] == area_id:
+                area = a
+                break
+
+        if not area:
+            self.chart_view.clear()
+            return
+
+        points = self.db.get_drip_points_by_area(area_id)
         if len(points) < 2:
             self.chart_view.clear()
+            QMessageBox.information(self, "提示", f"洞区 [{area['code']} - {area['name']}] 下的滴水点数量不足2个，无法进行联合分析")
             return
 
         points_data = {}
@@ -293,6 +328,18 @@ class MainWindow(QMainWindow):
         self.handling_panel.refresh()
         self.statistics_panel.refresh_points()
         self.report_panel.refresh()
+
+        current_area_id = self.joint_area_combo.currentData()
+        self.joint_area_combo.blockSignals(True)
+        self.joint_area_combo.clear()
+        areas = self.db.get_all_cave_areas()
+        for a in areas:
+            self.joint_area_combo.addItem(f"{a['code']} - {a['name']}", a["id"])
+        if current_area_id:
+            idx = self.joint_area_combo.findData(current_area_id)
+            if idx >= 0:
+                self.joint_area_combo.setCurrentIndex(idx)
+        self.joint_area_combo.blockSignals(False)
 
         if self.current_point_id:
             point = self.db.get_drip_point(self.current_point_id)

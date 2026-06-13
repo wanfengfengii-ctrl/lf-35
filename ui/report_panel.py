@@ -117,7 +117,9 @@ class ReportPanel(QWidget):
         splitter.setStretchFactor(2, 2)
         main_layout.addWidget(splitter)
 
-        self._on_type_changed(0)
+    def refresh(self):
+        self._refresh_drip_points()
+        self._refresh_cave_areas()
 
     def _refresh_report_types(self):
         types = self.generator.get_available_report_types()
@@ -205,8 +207,8 @@ class ReportPanel(QWidget):
         try:
             year_range = self.db.get_data_year_range(point_id)
             if year_range:
-                min_year = year_range.get("min_year", 2000)
-                max_year = year_range.get("max_year", 2100)
+                min_year = year_range[0] if year_range[0] else 2000
+                max_year = year_range[1] if year_range[1] else 2100
                 self.year_spin.setRange(min_year, max_year)
                 self.year_spin.setValue(max_year)
         except Exception:

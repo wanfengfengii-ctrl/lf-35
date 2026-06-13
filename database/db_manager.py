@@ -307,10 +307,10 @@ class DatabaseManager:
     def get_calibration_records(self, device_id: Optional[int] = None) -> List[Dict]:
         sql = """SELECT cr.*, d.code as device_code, d.name as device_name 
                  FROM calibration_records cr JOIN devices d ON cr.device_id = d.id"""
-        params = []
+        params = ()
         if device_id is not None:
             sql += " WHERE cr.device_id=?"
-            params.append(device_id)
+            params = (device_id,)
         sql += " ORDER BY cr.calibration_date DESC"
         cursor = self.execute(sql, params)
         return [dict(row) for row in cursor.fetchall()]
@@ -639,12 +639,15 @@ class DatabaseManager:
                  LEFT JOIN data_import_batches b ON qcr.batch_id = b.id
                  LEFT JOIN drip_points dp ON qcr.drip_point_id = dp.id"""
         params = []
+        conditions = []
         if batch_id is not None:
-            sql += " WHERE qcr.batch_id=?"
+            conditions.append("qcr.batch_id=?")
             params.append(batch_id)
         if drip_point_id is not None:
-            sql += " AND qcr.drip_point_id=?"
+            conditions.append("qcr.drip_point_id=?")
             params.append(drip_point_id)
+        if conditions:
+            sql += " WHERE " + " AND ".join(conditions)
         sql += " ORDER BY qcr.created_at DESC"
         cursor = self.execute(sql, params)
         return [dict(row) for row in cursor.fetchall()]
@@ -689,20 +692,20 @@ class DatabaseManager:
 
     def get_statistics_by_period(self, point_id: int, period: str = "day",
                                  start_time: str = "", end_time: str = "") -> List[Dict]:
+        import math
         period_formats = {
             "day": "%Y-%m-%d",
             "week": "%Y-%W",
             "month": "%Y-%m",
         }
         fmt = period_formats.get(period, "%Y-%m-%d")
-        
+
         sql = f"""SELECT 
                     strftime('{fmt}', record_time) as period,
                     COUNT(*) as data_count,
                     AVG(drip_interval) as avg_interval,
                     MIN(drip_interval) as min_interval,
                     MAX(drip_interval) as max_interval,
-                    STDEV(drip_interval) as std_interval,
                     AVG(temperature) as avg_temperature,
                     AVG(humidity) as avg_humidity,
                     AVG(salinity) as avg_salinity,
@@ -711,17 +714,36 @@ class DatabaseManager:
                    FROM monitoring_data 
                    WHERE drip_point_id=?"""
         params = [point_id]
-        
+
         if start_time:
             sql += " AND record_time >= ?"
             params.append(start_time)
         if end_time:
             sql += " AND record_time <= ?"
             params.append(end_time)
-        
+
         sql += " GROUP BY period ORDER BY period"
         cursor = self.execute(sql, params)
-        return [dict(row) for row in cursor.fetchall()]
+        results = [dict(row) for row in cursor.fetchall()]
+
+        for r in results:
+            cnt = r.get("data_count", 0)
+            if cnt < 2:
+                r["std_interval"] = 0.0
+                continue
+            period_val = r.get("period", "")
+            s_sql = f"SELECT drip_interval FROM monitoring_data WHERE drip_point_id=? AND strftime('{fmt}', record_time)=?"
+            s_params = [point_id, period_val]
+            s_cursor = self.execute(s_sql, s_params)
+            vals = [row[0] for row in s_cursor.fetchall() if row[0] is not None]
+            if len(vals) < 2:
+                r["std_interval"] = 0.0
+                continue
+            mean_val = sum(vals) / len(vals)
+            variance = sum((x - mean_val) ** 2 for x in vals) / len(vals)
+            r["std_interval"] = math.sqrt(variance)
+
+        return results
 
     def get_multi_point_data(self, point_ids: List[int], 
                             start_time: str = "", end_time: str = "") -> Dict[int, List[Dict]]:

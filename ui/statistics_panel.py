@@ -411,6 +411,9 @@ class StatisticsPanel(QWidget):
         item.setTextAlignment(Qt.AlignCenter)
         table.setItem(row, col, item)
 
+    def refresh_points(self):
+        self._load_point_options()
+
     def refresh(self):
         self._load_point_options()
         self.stats_table.setRowCount(0)
@@ -423,4 +426,114 @@ class StatisticsPanel(QWidget):
         self.export_btn.setEnabled(False)
 
     def _on_export(self):
-        QMessageBox.information(self, "提示", "导出功能开发中")
+        import csv
+        from PySide6.QtWidgets import QFileDialog
+        from datetime import datetime
+
+        tab_index = self.tabs.currentIndex()
+        tab_names = ["时段统计", "汇总统计", "多点对比"]
+        default_name = f"统计_{tab_names[tab_index]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "导出统计结果", default_name, "CSV 文件 (*.csv)"
+        )
+        if not file_path:
+            return
+
+        try:
+            if tab_index == 0:
+                self._export_period_stats(file_path)
+            elif tab_index == 1:
+                self._export_summary_stats(file_path)
+            elif tab_index == 2:
+                self._export_comparison_stats(file_path)
+
+            QMessageBox.information(self, "成功", f"统计结果已导出至:\n{file_path}")
+        except Exception as e:
+            QMessageBox.warning(self, "失败", f"导出失败: {str(e)}")
+
+    def _export_period_stats(self, file_path: str):
+        import csv
+
+        if not hasattr(self, "_period_stats") or not self._period_stats:
+            raise Exception("暂无时段统计数据")
+
+        headers = ["时段", "数据量", "平均间隔(s)", "最小间隔(s)", "最大间隔(s)",
+                  "标准差(s)", "变异系数(%)", "平均温度(℃)", "平均湿度(%)",
+                  "平均盐度(‰)", "异常数量"]
+
+        with open(file_path, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f)
+            writer.writerow(headers)
+            for s in self._period_stats:
+                writer.writerow([
+                    s.period,
+                    s.data_count,
+                    f"{s.avg_interval:.2f}",
+                    f"{s.min_interval:.2f}",
+                    f"{s.max_interval:.2f}",
+                    f"{s.std_interval:.2f}",
+                    f"{s.cv_interval:.2f}",
+                    f"{s.avg_temperature:.2f}" if s.avg_temperature is not None else "-",
+                    f"{s.avg_humidity:.2f}" if s.avg_humidity is not None else "-",
+                    f"{s.avg_salinity:.2f}" if s.avg_salinity is not None else "-",
+                    s.anomaly_count
+                ])
+
+    def _export_summary_stats(self, file_path: str):
+        import csv
+
+        row_count = self.summary_table.rowCount()
+        if row_count == 0:
+            raise Exception("暂无汇总统计数据")
+
+        with open(file_path, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f)
+            writer.writerow(["指标", "数值"])
+            for row in range(row_count):
+                key_item = self.summary_table.item(row, 0)
+                val_item = self.summary_table.item(row, 1)
+                key = key_item.text() if key_item else ""
+                val = val_item.text() if val_item else ""
+                writer.writerow([key, val])
+
+            if self.seasonal_table.rowCount() > 0:
+                writer.writerow([])
+                writer.writerow(["季节指数"])
+                season_headers = ["季节", "平均间隔(s)", "标准差(s)", "变异系数(%)", "数据量"]
+                writer.writerow(season_headers)
+                for row in range(self.seasonal_table.rowCount()):
+                    row_data = []
+                    for col in range(self.seasonal_table.columnCount()):
+                        item = self.seasonal_table.item(row, col)
+                        row_data.append(item.text() if item else "")
+                    writer.writerow(row_data)
+
+    def _export_comparison_stats(self, file_path: str):
+        import csv
+
+        if not hasattr(self, "_comparison") or self.comparison_stats_table.rowCount() == 0:
+            raise Exception("暂无多点对比数据")
+
+        with open(file_path, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f)
+
+            writer.writerow(["各点位统计"])
+            headers = ["点位编号", "平均间隔(s)", "标准差(s)", "变异系数(%)", "数据量", "趋势", "异常数"]
+            writer.writerow(headers)
+            for row in range(self.comparison_stats_table.rowCount()):
+                row_data = []
+                for col in range(self.comparison_stats_table.columnCount()):
+                    item = self.comparison_stats_table.item(row, col)
+                    row_data.append(item.text() if item else "")
+                writer.writerow(row_data)
+
+            if self.correlation_table.rowCount() > 0:
+                writer.writerow([])
+                writer.writerow(["相关系数矩阵"])
+                for row in range(self.correlation_table.rowCount()):
+                    row_data = []
+                    for col in range(self.correlation_table.columnCount()):
+                        item = self.correlation_table.item(row, col)
+                        row_data.append(item.text() if item else "")
+                    writer.writerow(row_data)

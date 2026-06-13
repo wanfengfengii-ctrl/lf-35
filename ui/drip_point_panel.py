@@ -304,29 +304,11 @@ class DripPointPanel(QWidget):
         data_count = self.db.get_monitoring_data_count(point["id"])
 
         if data_count > 0:
-            reply = QMessageBox.question(
-                self, "确认删除",
-                f"滴水点 [{point['code']} - {point['name']}] 已有 {data_count} 条历史监测数据。\n\n"
-                f"普通删除会被禁止。是否强制删除？（将同时删除所有关联数据）",
-                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-                QMessageBox.Cancel
+            QMessageBox.warning(
+                self, "无法删除",
+                f"滴水点 [{point['code']} - {point['name']}] 已有 {data_count} 条历史监测数据，无法删除。\n\n"
+                "如需删除，请先在【数据导入】模块清空该滴水点的所有历史数据，或联系管理员。"
             )
-
-            if reply == QMessageBox.Yes:
-                confirm = QMessageBox.question(
-                    self, "二次确认",
-                    f"确定要强制删除滴水点 [{point['code']}] 及其 {data_count} 条历史数据吗？\n此操作不可恢复！",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.No
-                )
-                if confirm == QMessageBox.Yes:
-                    success, msg = self.db.force_delete_drip_point(point["id"])
-                    if success:
-                        QMessageBox.information(self, "成功", msg)
-                        self.refresh()
-                        self.data_changed.emit()
-                    else:
-                        QMessageBox.warning(self, "失败", msg)
             return
 
         reply = QMessageBox.question(

@@ -349,6 +349,8 @@ class DevicePanel(QWidget):
 
     def _refresh_devices(self):
         devices = self.db.get_all_devices()
+
+        self.device_table.blockSignals(True)
         self.device_table.setRowCount(len(devices))
 
         status_colors = {
@@ -381,11 +383,15 @@ class DevicePanel(QWidget):
                 if item:
                     item.setTextAlignment(Qt.AlignCenter)
 
+        self.device_table.blockSignals(False)
+
         self.edit_dev_btn.setEnabled(False)
         self.delete_dev_btn.setEnabled(False)
 
     def _refresh_calibrations(self, device_id: Optional[int] = None):
         records = self.db.get_calibration_records(device_id)
+
+        self.calib_table.blockSignals(True)
         self.calib_table.setRowCount(len(records))
 
         for row, rec in enumerate(records):
@@ -415,6 +421,8 @@ class DevicePanel(QWidget):
                 item = self.calib_table.item(row, col)
                 if item:
                     item.setTextAlignment(Qt.AlignCenter)
+
+        self.calib_table.blockSignals(False)
 
         self.edit_calib_btn.setEnabled(False)
         self.delete_calib_btn.setEnabled(False)

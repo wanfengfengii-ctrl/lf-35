@@ -227,7 +227,6 @@ class DashboardPanel(QWidget):
         self._update_anomaly_table()
         self._update_type_distribution(risk_result)
         self._update_recommendations(risk_result)
-        self.data_changed.emit()
 
     def _update_risk_card(self, risk_result):
         if risk_result is None:
