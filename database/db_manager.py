@@ -770,11 +770,411 @@ class DatabaseManager:
                 (SELECT COUNT(*) FROM drip_points) as point_count,
                 (SELECT COUNT(*) FROM monitoring_data) as data_count,
                 (SELECT COUNT(*) FROM devices) as device_count,
-                (SELECT COUNT(*) FROM anomaly_records WHERE status='待处理') as pending_anomalies
+                (SELECT COUNT(*) FROM anomaly_records WHERE status='待处理') as pending_anomalies,
+                (SELECT COUNT(*) FROM maintenance_work_orders WHERE status='待处理') as pending_work_orders,
+                (SELECT COUNT(*) FROM maintenance_work_orders WHERE status='处理中') as processing_work_orders
             """
         )
         row = cursor.fetchone()
         return dict(row) if row else {}
+
+    def _generate_order_no(self) -> str:
+        from datetime import datetime
+        prefix = datetime.now().strftime("%Y%m%d")
+        cursor = self.execute(
+            "SELECT COUNT(*) FROM maintenance_work_orders WHERE order_no LIKE ?",
+            (f"WO{prefix}%",)
+        )
+        count = cursor.fetchone()[0]
+        return f"WO{prefix}{count + 1:04d}"
+
+    def add_work_order(self, title: str, anomaly_id: Optional[int] = None,
+                        drip_point_id: Optional[int] = None, area_id: Optional[int] = None,
+                        zone_id: Optional[int] = None, anomaly_type: str = "",
+                        risk_level: str = "中", assignee: str = "",
+                        status: str = "待处理", priority: str = "普通",
+                        plan_inspect_time: str = "", description: str = "",
+                        created_by: str = "") -> Tuple[bool, str, Optional[int]]:
+        try:
+            order_no = self._generate_order_no()
+            self.execute(
+                """INSERT INTO maintenance_work_orders 
+                   (order_no, title, anomaly_id, drip_point_id, area_id, zone_id,
+                    anomaly_type, risk_level, assignee, status, priority,
+                    plan_inspect_time, description, created_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (order_no, title, anomaly_id, drip_point_id, area_id, zone_id,
+                 anomaly_type, risk_level, assignee, status, priority,
+                 plan_inspect_time, description, created_by)
+            )
+            self.commit()
+            return True, "工单创建成功", self._cursor.lastrowid
+        except Exception as e:
+            self.rollback()
+            return False, f"创建失败: {str(e)}", None
+
+    def update_work_order(self, order_id: int, **kwargs) -> Tuple[bool, str]:
+        if not kwargs:
+            return False, "没有需要更新的字段"
+        try:
+            fields = []
+            params = []
+            for key, value in kwargs.items():
+                fields.append(f"{key}=?")
+                params.append(value)
+            params.append(order_id)
+            sql = f"UPDATE maintenance_work_orders SET {', '.join(fields)}, updated_at=datetime('now', 'localtime') WHERE id=?"
+            self.execute(sql, tuple(params))
+            self.commit()
+            return True, "更新成功"
+        except Exception as e:
+            self.rollback()
+            return False, f"更新失败: {str(e)}"
+
+    def delete_work_order(self, order_id: int) -> Tuple[bool, str]:
+        try:
+            self.execute("DELETE FROM maintenance_work_orders WHERE id=?", (order_id,))
+            self.commit()
+            return True, "删除成功"
+        except Exception as e:
+            self.rollback()
+            return False, f"删除失败: {str(e)}"
+
+    def get_work_order(self, order_id: int) -> Optional[Dict]:
+        cursor = self.execute(
+            """SELECT mwo.*, 
+                   dp.code as drip_point_code, dp.name as drip_point_name,
+                   ca.code as area_code, ca.name as area_name,
+                   cz.code as zone_code, cz.name as zone_name,
+                   ar.anomaly_type as anomaly_type_name
+               FROM maintenance_work_orders mwo
+               LEFT JOIN drip_points dp ON mwo.drip_point_id = dp.id
+               LEFT JOIN cave_areas ca ON mwo.area_id = ca.id
+               LEFT JOIN cave_zones cz ON mwo.zone_id = cz.id
+               LEFT JOIN anomaly_records ar ON mwo.anomaly_id = ar.id
+               WHERE mwo.id=?""",
+            (order_id,)
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def get_work_orders(self, status: Optional[str] = None,
+                        area_id: Optional[int] = None,
+                        assignee: Optional[str] = None,
+                        risk_level: Optional[str] = None,
+                        start_date: str = "", end_date: str = "",
+                        drip_point_id: Optional[int] = None) -> List[Dict]:
+        sql = """SELECT mwo.*, 
+                   dp.code as drip_point_code, dp.name as drip_point_name,
+                   ca.code as area_code, ca.name as area_name,
+                   cz.code as zone_code, cz.name as zone_name
+               FROM maintenance_work_orders mwo
+               LEFT JOIN drip_points dp ON mwo.drip_point_id = dp.id
+               LEFT JOIN cave_areas ca ON mwo.area_id = ca.id
+               LEFT JOIN cave_zones cz ON mwo.zone_id = cz.id
+               WHERE 1=1"""
+        params = []
+        if status:
+            sql += " AND mwo.status=?"
+            params.append(status)
+        if area_id:
+            sql += " AND mwo.area_id=?"
+            params.append(area_id)
+        if assignee:
+            sql += " AND mwo.assignee=?"
+            params.append(assignee)
+        if risk_level:
+            sql += " AND mwo.risk_level=?"
+            params.append(risk_level)
+        if drip_point_id:
+            sql += " AND mwo.drip_point_id=?"
+            params.append(drip_point_id)
+        if start_date:
+            sql += " AND date(mwo.created_at) >= date(?)"
+            params.append(start_date)
+        if end_date:
+            sql += " AND date(mwo.created_at) <= date(?)"
+            params.append(end_date)
+        sql += " ORDER BY mwo.created_at DESC"
+        cursor = self.execute(sql, params)
+        return [dict(row) for row in cursor.fetchall()]
+
+    def update_work_order_status(self, order_id: int, status: str,
+                                  assignee: str = "") -> Tuple[bool, str]:
+        try:
+            if status == "处理中":
+                self.execute(
+                    """UPDATE maintenance_work_orders 
+                       SET status=?, assignee=?, actual_arrive_time=datetime('now', 'localtime'),
+                           updated_at=datetime('now', 'localtime')
+                       WHERE id=?""",
+                    (status, assignee, order_id)
+                )
+            elif status in ("已完成", "已关闭"):
+                close_time_expr = "datetime('now', 'localtime')" if status == "已关闭" else "NULL"
+                self.execute(
+                    f"""UPDATE maintenance_work_orders 
+                       SET status=?, assignee=?, 
+                           handle_duration=CASE 
+                               WHEN actual_arrive_time IS NOT NULL AND actual_arrive_time != '' 
+                               THEN CAST((julianday(datetime('now', 'localtime')) - julianday(actual_arrive_time)) * 24 * 60 AS INTEGER)
+                               ELSE NULL END,
+                           updated_at=datetime('now', 'localtime'),
+                           closed_at={close_time_expr}
+                       WHERE id=?""",
+                    (status, assignee, order_id)
+                )
+            else:
+                self.execute(
+                    """UPDATE maintenance_work_orders 
+                       SET status=?, assignee=?, updated_at=datetime('now', 'localtime')
+                       WHERE id=?""",
+                    (status, assignee, order_id)
+                )
+            self.commit()
+            return True, "状态更新成功"
+        except Exception as e:
+            self.rollback()
+            return False, f"状态更新失败: {str(e)}"
+
+    def add_inspection_record(self, work_order_id: int, inspector: str,
+                               inspect_time: str, inspection_content: str = "",
+                               measures: str = "", result: str = "",
+                               recheck_conclusion: str = "",
+                               notes: str = "") -> Tuple[bool, str, Optional[int]]:
+        try:
+            self.execute(
+                """INSERT INTO inspection_records 
+                   (work_order_id, inspector, inspect_time, inspection_content,
+                    measures, result, recheck_conclusion, notes)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (work_order_id, inspector, inspect_time, inspection_content,
+                 measures, result, recheck_conclusion, notes)
+            )
+            self.commit()
+            return True, "添加成功", self._cursor.lastrowid
+        except Exception as e:
+            self.rollback()
+            return False, f"添加失败: {str(e)}", None
+
+    def get_inspection_records(self, work_order_id: Optional[int] = None) -> List[Dict]:
+        sql = """SELECT ir.*, mwo.order_no, mwo.title as order_title
+               FROM inspection_records ir
+               JOIN maintenance_work_orders mwo ON ir.work_order_id = mwo.id"""
+        params = []
+        if work_order_id:
+            sql += " WHERE ir.work_order_id=?"
+            params.append(work_order_id)
+        sql += " ORDER BY ir.inspect_time DESC"
+        cursor = self.execute(sql, params)
+        return [dict(row) for row in cursor.fetchall()]
+
+    def add_attachment(self, work_order_id: int, file_name: str,
+                         file_path: str, file_size: Optional[int] = None,
+                         file_type: str = "", uploaded_by: str = ""
+                         ) -> Tuple[bool, str, Optional[int]]:
+        try:
+            self.execute(
+                """INSERT INTO work_order_attachments 
+                   (work_order_id, file_name, file_path, file_size, file_type, uploaded_by)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (work_order_id, file_name, file_path, file_size, file_type, uploaded_by)
+            )
+            self.commit()
+            return True, "上传成功", self._cursor.lastrowid
+        except Exception as e:
+            self.rollback()
+            return False, f"上传失败: {str(e)}", None
+
+    def get_attachments(self, work_order_id: int) -> List[Dict]:
+        cursor = self.execute(
+            "SELECT * FROM work_order_attachments WHERE work_order_id=? ORDER BY uploaded_at DESC",
+            (work_order_id,)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def delete_attachment(self, attachment_id: int) -> Tuple[bool, str]:
+        try:
+            self.execute("DELETE FROM work_order_attachments WHERE id=?", (attachment_id,))
+            self.commit()
+            return True, "删除成功"
+        except Exception as e:
+            self.rollback()
+            return False, f"删除失败: {str(e)}"
+
+    def get_overdue_orders(self) -> List[Dict]:
+        cursor = self.execute(
+            """SELECT mwo.*, 
+                   dp.code as drip_point_code, dp.name as drip_point_name,
+                   ca.code as area_code, ca.name as area_name
+               FROM maintenance_work_orders mwo
+               LEFT JOIN drip_points dp ON mwo.drip_point_id = dp.id
+               LEFT JOIN cave_areas ca ON mwo.area_id = ca.id
+               WHERE mwo.status IN ('待处理', '处理中')
+               AND mwo.plan_inspect_time IS NOT NULL
+               AND mwo.plan_inspect_time != ''
+               AND datetime(mwo.plan_inspect_time) < datetime('now', 'localtime')
+               ORDER BY mwo.plan_inspect_time ASC"""
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_work_order_stats(self) -> Dict:
+        cursor = self.execute(
+            """SELECT 
+                (SELECT COUNT(*) FROM maintenance_work_orders) as total,
+                (SELECT COUNT(*) FROM maintenance_work_orders WHERE status='待处理') as pending,
+                (SELECT COUNT(*) FROM maintenance_work_orders WHERE status='处理中') as processing,
+                (SELECT COUNT(*) FROM maintenance_work_orders WHERE status='待复检') as recheck_pending,
+                (SELECT COUNT(*) FROM maintenance_work_orders WHERE status='已完成') as completed,
+                (SELECT COUNT(*) FROM maintenance_work_orders WHERE status='已关闭') as closed,
+                (SELECT COUNT(*) FROM maintenance_work_orders 
+                 WHERE status IN ('待处理', '处理中')
+                 AND plan_inspect_time IS NOT NULL
+                 AND plan_inspect_time != ''
+                 AND datetime(plan_inspect_time) < datetime('now', 'localtime')) as overdue
+            """
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else {}
+
+    def get_efficiency_stats(self, start_date: str = "", end_date: str = "") -> Dict:
+        base_where = "1=1"
+        params = []
+        if start_date:
+            base_where += " AND date(created_at) >= date(?)"
+            params.append(start_date)
+        if end_date:
+            base_where += " AND date(created_at) <= date(?)"
+            params.append(end_date)
+
+        cursor = self.execute(
+            f"""SELECT 
+                COUNT(*) as total_orders,
+                SUM(CASE WHEN status IN ('已完成', '已关闭') THEN 1 ELSE 0 END) as total_completed,
+                AVG(
+                    CASE WHEN handle_duration IS NOT NULL THEN handle_duration ELSE NULL END
+                ) as avg_handle_minutes,
+                AVG(
+                    CASE WHEN actual_arrive_time IS NOT NULL AND actual_arrive_time != ''
+                         THEN CAST((julianday(actual_arrive_time) - julianday(created_at)) * 24 * 60 AS INTEGER)
+                         ELSE NULL END
+                ) as avg_response_minutes,
+                SUM(CASE WHEN status IN ('待处理', '处理中')
+                    AND plan_inspect_time IS NOT NULL AND plan_inspect_time != ''
+                    AND datetime(plan_inspect_time) < datetime('now', 'localtime') THEN 1 ELSE 0 END
+                ) as overdue_count,
+                SUM(CASE WHEN actual_arrive_time IS NOT NULL AND actual_arrive_time != ''
+                    AND plan_inspect_time IS NOT NULL AND plan_inspect_time != ''
+                    AND datetime(actual_arrive_time) <= datetime(plan_inspect_time) THEN 1 ELSE 0 END
+                ) as on_time_count,
+                SUM(CASE WHEN actual_arrive_time IS NOT NULL AND actual_arrive_time != ''
+                    AND plan_inspect_time IS NOT NULL AND plan_inspect_time != '' THEN 1 ELSE 0 END
+                ) as arrived_with_plan_count
+             FROM maintenance_work_orders WHERE {base_where}""",
+            tuple(params)
+        )
+        row = cursor.fetchone()
+        result = dict(row) if row else {}
+        return result
+
+    def get_repeat_anomaly_points(self, start_date: str = "",
+                                   end_date: str = "",
+                                   min_count: int = 2) -> List[Dict]:
+        sql = """SELECT 
+                    mwo.drip_point_id,
+                    dp.code as drip_point_code,
+                    dp.name as drip_point_name,
+                    ca.code as area_code,
+                    ca.name as area_name,
+                    COUNT(*) as order_count,
+                    GROUP_CONCAT(DISTINCT mwo.anomaly_type) as anomaly_types
+                 FROM maintenance_work_orders mwo
+                 LEFT JOIN drip_points dp ON mwo.drip_point_id = dp.id
+                 LEFT JOIN cave_areas ca ON mwo.area_id = ca.id
+                 WHERE mwo.drip_point_id IS NOT NULL"""
+        params = []
+        if start_date:
+            sql += " AND date(mwo.created_at) >= date(?)"
+            params.append(start_date)
+        if end_date:
+            sql += " AND date(mwo.created_at) <= date(?)"
+            params.append(end_date)
+        sql += """
+                 GROUP BY mwo.drip_point_id
+                 HAVING order_count >= ?
+                 ORDER BY order_count DESC"""
+        params.append(min_count)
+        cursor = self.execute(sql, params)
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_maintenance_history(self, drip_point_id: int) -> List[Dict]:
+        cursor = self.execute(
+            """SELECT mwo.*, 
+                   dp.code as drip_point_code, dp.name as drip_point_name
+               FROM maintenance_work_orders mwo
+               LEFT JOIN drip_points dp ON mwo.drip_point_id = dp.id
+               WHERE mwo.drip_point_id=?
+               ORDER BY mwo.created_at DESC""",
+            (drip_point_id,)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def create_work_order_from_anomaly(self, anomaly_id: int,
+                                        assignee: str = "",
+                                        plan_inspect_time: str = "",
+                                        created_by: str = "") -> Tuple[bool, str, Optional[int]]:
+        cursor = self.execute(
+            "SELECT id FROM maintenance_work_orders WHERE anomaly_id=?",
+            (anomaly_id,)
+        )
+        if cursor.fetchone():
+            return False, "该异常已有对应工单", None
+        anomaly = None
+        records = self.get_anomaly_records()
+        for r in records:
+            if r["id"] == anomaly_id:
+                anomaly = r
+                break
+        if not anomaly:
+            return False, "异常记录不存在", None
+        title = f"[{anomaly.get('anomaly_type', '异常')}] {anomaly.get('drip_point_code', '')} 巡检工单"
+        point = self.get_drip_point(anomaly["drip_point_id"]) if anomaly.get("drip_point_id") else None
+        return self.add_work_order(
+            title=title,
+            anomaly_id=anomaly_id,
+            drip_point_id=anomaly["drip_point_id"],
+            area_id=point.get("area_id") if point else None,
+            zone_id=point.get("zone_id") if point else None,
+            anomaly_type=anomaly.get("anomaly_type", ""),
+            risk_level=anomaly.get("risk_level", "中"),
+            assignee=assignee,
+            status="待处理",
+            plan_inspect_time=plan_inspect_time,
+            description=anomaly.get("description", ""),
+            created_by=created_by
+        )
+
+    def batch_create_work_orders_from_anomalies(self, anomaly_ids: List[int],
+                                                  assignee: str = "",
+                                                  created_by: str = "") -> Tuple[int, int, List[str]]:
+        created = 0
+        skipped = 0
+        messages = []
+        for aid in anomaly_ids:
+            from datetime import datetime, timedelta
+            plan_time = (datetime.now() + timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
+            success, msg, _ = self.create_work_order_from_anomaly(
+                anomaly_id=aid,
+                assignee=assignee,
+                plan_inspect_time=plan_time,
+                created_by=created_by
+            )
+            if success:
+                created += 1
+            else:
+                skipped += 1
+                messages.append(msg)
+        return created, skipped, messages
 
 
 def get_db() -> DatabaseManager:

@@ -2,7 +2,8 @@ from typing import Optional, Dict, List
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget, QTableWidgetItem,
     QMessageBox, QHeaderView, QLabel, QGroupBox, QComboBox,
-    QAbstractItemView, QSplitter, QDoubleSpinBox, QSpinBox, QFormLayout, QDialog
+    QAbstractItemView, QSplitter, QDoubleSpinBox, QSpinBox, QFormLayout, QDialog,
+    QCheckBox
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QBrush
@@ -72,6 +73,7 @@ class ThresholdDialog(QDialog):
 
 class AnomalyPanel(QWidget):
     anomalies_updated = Signal()
+    work_order_created = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -123,16 +125,26 @@ class AnomalyPanel(QWidget):
         self.settings_btn.clicked.connect(self._on_settings)
         self.delete_btn = QPushButton("删除选中记录")
         self.delete_btn.clicked.connect(self._on_delete)
+        self.create_order_btn = QPushButton("创建巡检工单")
+        self.create_order_btn.clicked.connect(self._on_create_work_order)
+        self.create_order_btn.setToolTip("为选中的异常记录创建巡检工单")
         self.refresh_btn = QPushButton("刷新")
         self.refresh_btn.clicked.connect(self.refresh)
 
         self.save_btn.setEnabled(False)
         self.delete_btn.setEnabled(False)
+        self.create_order_btn.setEnabled(False)
+
+        self.auto_order_check = QCheckBox("自动生成巡检工单")
+        self.auto_order_check.setChecked(True)
+        self.auto_order_check.setToolTip("保存异常记录时自动创建对应的巡检工单")
 
         btn_layout.addWidget(self.detect_btn)
         btn_layout.addWidget(self.save_btn)
         btn_layout.addWidget(self.settings_btn)
         btn_layout.addWidget(self.delete_btn)
+        btn_layout.addWidget(self.create_order_btn)
+        btn_layout.addWidget(self.auto_order_check)
         btn_layout.addStretch()
         btn_layout.addWidget(self.refresh_btn)
         top_layout.addLayout(btn_layout)
@@ -213,6 +225,7 @@ class AnomalyPanel(QWidget):
     def _on_selection_changed(self):
         has_selection = len(self.record_table.selectedItems()) > 0
         self.delete_btn.setEnabled(has_selection)
+        self.create_order_btn.setEnabled(has_selection)
 
     def _get_risk_color(self, risk_level: str) -> QColor:
         colors = {
@@ -332,6 +345,17 @@ class AnomalyPanel(QWidget):
             return
 
         saved_count, msg = self.detector.save_anomalies_to_db(self.db, point_id, self.current_result)
+
+        if self.auto_order_check.isChecked() and saved_count > 0:
+            records = self.db.get_anomaly_records(point_id)
+            new_ids = [r["id"] for r in records]
+            if new_ids:
+                created, skipped, _ = self.db.batch_create_work_orders_from_anomalies(new_ids)
+                if created > 0:
+                    msg += f"\n已自动创建 {created} 个巡检工单"
+                if skipped > 0:
+                    msg += f"\n跳过 {skipped} 个（已有对应工单）"
+
         QMessageBox.information(self, "保存结果", msg)
         self.refresh()
         self.save_btn.setEnabled(False)
@@ -368,3 +392,29 @@ class AnomalyPanel(QWidget):
 
     def get_current_detection_result(self):
         return getattr(self, 'current_result', None)
+
+    def _on_create_work_order(self):
+        row = self.record_table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "提示", "请先选择一条异常记录")
+            return
+
+        anomaly_id = int(self.record_table.item(row, 0).text())
+        anomaly_type = self.record_table.item(row, 2).text()
+
+        reply = QMessageBox.question(
+            self, "确认创建工单",
+            f"确定要为这条 [{anomaly_type}] 异常记录创建巡检工单吗？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        success, msg, order_id = self.db.create_work_order_from_anomaly(anomaly_id)
+        if success:
+            QMessageBox.information(self, "成功", f"{msg}\n工单号: {order_id}")
+            self.work_order_created.emit(order_id)
+            self.refresh()
+        else:
+            QMessageBox.warning(self, "失败", msg)

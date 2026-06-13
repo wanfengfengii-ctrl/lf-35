@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QColor, QBrush, QFont
 
 from database.db_manager import get_db
-from core.anomaly_detector import AdvancedAnomalyDetector, ANOMALY_TYPES, RISK_LEVELS, ANOMALY_STATUS_COLORS
+from core.anomaly_detector import AdvancedAnomalyDetector, ANOMALY_TYPES, RISK_LEVELS, ANOMALY_STATUS_COLORS, WORK_ORDER_STATUS_COLORS, WORK_ORDER_STATUSES
 
 
 RISK_LEVEL_COLORS = {
@@ -177,8 +177,32 @@ class DashboardPanel(QWidget):
         rec_layout.addWidget(self.rec_label)
         bottom_splitter.addWidget(rec_group)
 
+        wo_group = QGroupBox("工单待办")
+        wo_layout = QVBoxLayout(wo_group)
+
+        wo_card_row = QHBoxLayout()
+        self.wo_pending_card = self._create_summary_card("待处理", "0", "#ffebee", "#c62828")
+        self.wo_processing_card = self._create_summary_card("处理中", "0", "#fff3e0", "#e65100")
+        self.wo_overdue_card = self._create_summary_card("已超期", "0", "#fce4ec", "#c62828")
+        wo_card_row.addWidget(self.wo_pending_card)
+        wo_card_row.addWidget(self.wo_processing_card)
+        wo_card_row.addWidget(self.wo_overdue_card)
+        wo_layout.addLayout(wo_card_row)
+
+        self.wo_table = QTableWidget()
+        self.wo_table.setColumnCount(5)
+        self.wo_table.setHorizontalHeaderLabels(["工单编号", "标题", "责任人", "状态", "计划巡检"])
+        self.wo_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.wo_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.wo_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.wo_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.wo_table.setMaximumHeight(200)
+        wo_layout.addWidget(self.wo_table)
+        bottom_splitter.addWidget(wo_group)
+
         bottom_splitter.setStretchFactor(0, 1)
         bottom_splitter.setStretchFactor(1, 1)
+        bottom_splitter.setStretchFactor(2, 1)
         splitter.addWidget(bottom_splitter)
 
         splitter.setStretchFactor(0, 2)
@@ -227,6 +251,7 @@ class DashboardPanel(QWidget):
         self._update_anomaly_table()
         self._update_type_distribution(risk_result)
         self._update_recommendations(risk_result)
+        self._update_work_order_section()
 
     def _update_risk_card(self, risk_result):
         if risk_result is None:
@@ -351,3 +376,37 @@ class DashboardPanel(QWidget):
         else:
             self.auto_refresh_btn.setText("自动刷新: 关")
             self._auto_refresh_timer.stop()
+
+    def _update_work_order_section(self):
+        try:
+            wo_stats = self.db.get_work_order_stats()
+        except Exception:
+            wo_stats = {}
+
+        self._set_card_value(self.wo_pending_card, str(wo_stats.get("pending", 0)))
+        self._set_card_value(self.wo_processing_card, str(wo_stats.get("processing", 0)))
+        self._set_card_value(self.wo_overdue_card, str(wo_stats.get("overdue", 0)))
+
+        pending_orders = self.db.get_work_orders(status="待处理")
+        overdue_orders = self.db.get_overdue_orders()
+        display_orders = overdue_orders[:5] + pending_orders[:5]
+
+        self.wo_table.setRowCount(len(display_orders))
+        for row, o in enumerate(display_orders):
+            self.wo_table.setItem(row, 0, QTableWidgetItem(o.get("order_no", "-")))
+            self.wo_table.setItem(row, 1, QTableWidgetItem(o.get("title", "-")))
+            self.wo_table.setItem(row, 2, QTableWidgetItem(o.get("assignee", "-") or "未分配"))
+
+            status_text = o.get("status", "-")
+            status_item = QTableWidgetItem(status_text)
+            status_color = QColor(WORK_ORDER_STATUS_COLORS.get(status_text, "#000000"))
+            status_item.setForeground(status_color)
+            self.wo_table.setItem(row, 3, status_item)
+
+            plan_time = o.get("plan_inspect_time", "-") or "-"
+            self.wo_table.setItem(row, 4, QTableWidgetItem(plan_time))
+
+            for col in range(5):
+                item = self.wo_table.item(row, col)
+                if item:
+                    item.setTextAlignment(Qt.AlignCenter)

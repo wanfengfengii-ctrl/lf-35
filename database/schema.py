@@ -174,6 +174,84 @@ CREATE INDEX IF NOT EXISTS idx_calibration_device
 ON calibration_records(device_id, calibration_date)
 """
 
+CREATE_TABLE_MAINTENANCE_WORK_ORDERS = """
+CREATE TABLE IF NOT EXISTS maintenance_work_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_no TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    anomaly_id INTEGER,
+    drip_point_id INTEGER,
+    area_id INTEGER,
+    zone_id INTEGER,
+    anomaly_type TEXT,
+    risk_level TEXT NOT NULL DEFAULT '中',
+    assignee TEXT,
+    status TEXT NOT NULL DEFAULT '待处理',
+    priority TEXT NOT NULL DEFAULT '普通',
+    plan_inspect_time TEXT,
+    actual_arrive_time TEXT,
+    handle_duration INTEGER,
+    description TEXT,
+    inspection_content TEXT,
+    measures TEXT,
+    recheck_conclusion TEXT,
+    notes TEXT,
+    created_by TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    closed_at TEXT,
+    FOREIGN KEY (anomaly_id) REFERENCES anomaly_records(id) ON DELETE SET NULL,
+    FOREIGN KEY (drip_point_id) REFERENCES drip_points(id) ON DELETE SET NULL,
+    FOREIGN KEY (area_id) REFERENCES cave_areas(id) ON DELETE SET NULL,
+    FOREIGN KEY (zone_id) REFERENCES cave_zones(id) ON DELETE SET NULL
+)
+"""
+
+CREATE_TABLE_INSPECTION_RECORDS = """
+CREATE TABLE IF NOT EXISTS inspection_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    work_order_id INTEGER NOT NULL,
+    inspector TEXT NOT NULL,
+    inspect_time TEXT NOT NULL,
+    inspection_content TEXT,
+    measures TEXT,
+    result TEXT,
+    recheck_conclusion TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (work_order_id) REFERENCES maintenance_work_orders(id) ON DELETE CASCADE
+)
+"""
+
+CREATE_TABLE_WORK_ORDER_ATTACHMENTS = """
+CREATE TABLE IF NOT EXISTS work_order_attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    work_order_id INTEGER NOT NULL,
+    file_name TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    file_size INTEGER,
+    file_type TEXT,
+    uploaded_by TEXT,
+    uploaded_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (work_order_id) REFERENCES maintenance_work_orders(id) ON DELETE CASCADE
+)
+"""
+
+CREATE_INDEX_WORK_ORDER_STATUS = """
+CREATE INDEX IF NOT EXISTS idx_work_order_status
+ON maintenance_work_orders(status, risk_level, assignee)
+"""
+
+CREATE_INDEX_WORK_ORDER_TIME = """
+CREATE INDEX IF NOT EXISTS idx_work_order_time
+ON maintenance_work_orders(plan_inspect_time, created_at)
+"""
+
+CREATE_INDEX_INSPECTION_ORDER = """
+CREATE INDEX IF NOT EXISTS idx_inspection_order
+ON inspection_records(work_order_id, inspect_time)
+"""
+
 ALL_TABLES = [
     CREATE_TABLE_CAVE_AREAS,
     CREATE_TABLE_CAVE_ZONES,
@@ -185,7 +263,13 @@ ALL_TABLES = [
     CREATE_TABLE_ANOMALY_RECORDS,
     CREATE_TABLE_HANDLING_RECORDS,
     CREATE_TABLE_QUALITY_CONTROL_RECORDS,
+    CREATE_TABLE_MAINTENANCE_WORK_ORDERS,
+    CREATE_TABLE_INSPECTION_RECORDS,
+    CREATE_TABLE_WORK_ORDER_ATTACHMENTS,
     CREATE_INDEX_MONITORING_TIME,
     CREATE_INDEX_ANOMALY_STATUS,
     CREATE_INDEX_CALIBRATION_DEVICE,
+    CREATE_INDEX_WORK_ORDER_STATUS,
+    CREATE_INDEX_WORK_ORDER_TIME,
+    CREATE_INDEX_INSPECTION_ORDER,
 ]

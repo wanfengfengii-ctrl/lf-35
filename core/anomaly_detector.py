@@ -34,6 +34,33 @@ ANOMALY_STATUS_COLORS = {
     "已忽略": "#7f7f7f",
 }
 
+WORK_ORDER_STATUSES = ["待处理", "处理中", "待复检", "已完成", "已关闭"]
+
+WORK_ORDER_STATUS_COLORS = {
+    "待处理": "#d62728",
+    "处理中": "#ff7f0e",
+    "待复检": "#9467bd",
+    "已完成": "#2ca02c",
+    "已关闭": "#7f7f7f",
+}
+
+WORK_ORDER_PRIORITIES = ["紧急", "高", "普通", "低"]
+
+WORK_ORDER_PRIORITY_COLORS = {
+    "紧急": "#d62728",
+    "高": "#ff7f0e",
+    "普通": "#1f77b4",
+    "低": "#2ca02c",
+}
+
+WORK_ORDER_STATUS_FLOW = {
+    "待处理": ["处理中", "已关闭"],
+    "处理中": ["待复检", "已完成", "已关闭"],
+    "待复检": ["处理中", "已完成", "已关闭"],
+    "已完成": ["待复检", "已关闭"],
+    "已关闭": ["待处理"],
+}
+
 
 @dataclass
 class AnomalySegment:

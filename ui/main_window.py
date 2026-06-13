@@ -21,6 +21,7 @@ from ui.dashboard_panel import DashboardPanel
 from ui.handling_panel import HandlingPanel
 from ui.statistics_panel import StatisticsPanel
 from ui.report_panel import ReportPanel
+from ui.work_order_panel import WorkOrderPanel
 
 
 class MainWindow(QMainWindow):
@@ -58,6 +59,7 @@ class MainWindow(QMainWindow):
         self.anomaly_panel = AnomalyPanel()
         self.dashboard_panel = DashboardPanel()
         self.handling_panel = HandlingPanel()
+        self.work_order_panel = WorkOrderPanel()
         self.statistics_panel = StatisticsPanel()
         self.report_panel = ReportPanel()
 
@@ -69,6 +71,7 @@ class MainWindow(QMainWindow):
         self.tab_widget.addTab(self.anomaly_panel, "异常检测")
         self.tab_widget.addTab(self.dashboard_panel, "预警看板")
         self.tab_widget.addTab(self.handling_panel, "处理追踪")
+        self.tab_widget.addTab(self.work_order_panel, "维护巡检")
         self.tab_widget.addTab(self.statistics_panel, "统计分析")
         self.tab_widget.addTab(self.report_panel, "报告导出")
 
@@ -164,8 +167,10 @@ class MainWindow(QMainWindow):
         self.data_import_panel.data_imported.connect(self.refresh_all)
         self.qc_panel.data_changed.connect(self.refresh_all)
         self.anomaly_panel.anomalies_updated.connect(self._on_anomalies_updated)
+        self.anomaly_panel.work_order_created.connect(self._on_work_order_created)
         self.dashboard_panel.data_changed.connect(self.refresh_all)
         self.handling_panel.data_changed.connect(self.refresh_all)
+        self.work_order_panel.data_changed.connect(self.refresh_all)
         self.statistics_panel.data_changed.connect(self.refresh_all)
         self.report_panel.data_changed.connect(self.refresh_all)
 
@@ -182,6 +187,12 @@ class MainWindow(QMainWindow):
     def _on_anomalies_updated(self):
         self.detector = self.anomaly_panel.get_detector()
         self._on_refresh_chart()
+
+    def _on_work_order_created(self, order_id: int):
+        self.work_order_panel.refresh()
+        wo_index = self.tab_widget.indexOf(self.work_order_panel)
+        if wo_index >= 0:
+            self.tab_widget.setCurrentIndex(wo_index)
 
     def _on_chart_type_changed(self):
         chart_type = self.chart_type_combo.currentData()
@@ -326,6 +337,7 @@ class MainWindow(QMainWindow):
         self.anomaly_panel.refresh()
         self.dashboard_panel.refresh()
         self.handling_panel.refresh()
+        self.work_order_panel.refresh()
         self.statistics_panel.refresh_points()
         self.report_panel.refresh()
 
@@ -359,14 +371,22 @@ class MainWindow(QMainWindow):
         total_points = stats.get("point_count", 0)
         pending = stats.get("pending_anomalies", 0)
 
+        wo_stats = self.db.get_work_order_stats()
+        pending_wo = wo_stats.get("pending", 0)
+        overdue_wo = wo_stats.get("overdue", 0)
+
         status_text = (
             f"洞区: {stats.get('area_count', 0)} | "
             f"子区域: {stats.get('zone_count', 0)} | "
             f"滴水点: {total_points} | "
             f"监测数据: {total_data} 条 | "
             f"设备: {stats.get('device_count', 0)} | "
-            f"待处理异常: {pending}"
+            f"待处理异常: {pending} | "
+            f"待处理工单: {pending_wo}"
         )
+
+        if overdue_wo > 0:
+            status_text += f" | ⚠超期工单: {overdue_wo}"
 
         if self.current_point_id:
             point = self.db.get_drip_point(self.current_point_id)
