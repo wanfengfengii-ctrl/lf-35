@@ -8,12 +8,19 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QIcon
 
 from database.db_manager import get_db
-from core.anomaly_detector import AnomalyDetector, SEASONS, ANOMALY_TYPES
+from core.anomaly_detector import AnomalyDetector, AdvancedAnomalyDetector, SEASONS, ANOMALY_TYPES
 from core.chart_view import ChartViewWidget
 
+from ui.cave_panel import CavePanel
 from ui.drip_point_panel import DripPointPanel
+from ui.device_panel import DevicePanel
 from ui.data_import_panel import DataImportPanel
+from ui.qc_panel import QCPanel
 from ui.anomaly_panel import AnomalyPanel
+from ui.dashboard_panel import DashboardPanel
+from ui.handling_panel import HandlingPanel
+from ui.statistics_panel import StatisticsPanel
+from ui.report_panel import ReportPanel
 
 
 class MainWindow(QMainWindow):
@@ -28,8 +35,8 @@ class MainWindow(QMainWindow):
         self.refresh_all()
 
     def _init_ui(self):
-        self.setWindowTitle("海蚀洞滴水监测数据管理系统")
-        self.resize(1400, 900)
+        self.setWindowTitle("海蚀洞滴水监测数据管理系统 v2.0")
+        self.resize(1500, 950)
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -42,13 +49,28 @@ class MainWindow(QMainWindow):
         left_layout.setContentsMargins(0, 0, 0, 0)
 
         self.tab_widget = QTabWidget()
-        self.drip_point_panel = DripPointPanel()
-        self.data_import_panel = DataImportPanel()
-        self.anomaly_panel = AnomalyPanel()
 
+        self.cave_panel = CavePanel()
+        self.drip_point_panel = DripPointPanel()
+        self.device_panel = DevicePanel()
+        self.data_import_panel = DataImportPanel()
+        self.qc_panel = QCPanel()
+        self.anomaly_panel = AnomalyPanel()
+        self.dashboard_panel = DashboardPanel()
+        self.handling_panel = HandlingPanel()
+        self.statistics_panel = StatisticsPanel()
+        self.report_panel = ReportPanel()
+
+        self.tab_widget.addTab(self.cave_panel, "洞区管理")
         self.tab_widget.addTab(self.drip_point_panel, "滴水点管理")
+        self.tab_widget.addTab(self.device_panel, "设备档案")
         self.tab_widget.addTab(self.data_import_panel, "数据导入")
+        self.tab_widget.addTab(self.qc_panel, "数据质控")
         self.tab_widget.addTab(self.anomaly_panel, "异常检测")
+        self.tab_widget.addTab(self.dashboard_panel, "预警看板")
+        self.tab_widget.addTab(self.handling_panel, "处理追踪")
+        self.tab_widget.addTab(self.statistics_panel, "统计分析")
+        self.tab_widget.addTab(self.report_panel, "报告导出")
 
         left_layout.addWidget(self.tab_widget)
         self.splitter.addWidget(left_widget)
@@ -66,6 +88,8 @@ class MainWindow(QMainWindow):
         self.chart_type_combo.addItem("节律曲线", "rhythm")
         self.chart_type_combo.addItem("季节对比", "season")
         self.chart_type_combo.addItem("异常统计", "anomaly")
+        self.chart_type_combo.addItem("多点位联合分析", "joint")
+        self.chart_type_combo.addItem("时段统计图", "period_stats")
         self.chart_type_combo.currentIndexChanged.connect(self._on_chart_type_changed)
         chart_btn_layout.addWidget(self.chart_type_combo)
 
@@ -88,7 +112,7 @@ class MainWindow(QMainWindow):
 
         self.splitter.setStretchFactor(0, 1)
         self.splitter.setStretchFactor(1, 2)
-        self.splitter.setSizes([450, 950])
+        self.splitter.setSizes([500, 1000])
 
         main_layout.addWidget(self.splitter)
 
@@ -100,6 +124,12 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar("主工具栏")
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
+
+        refresh_action = QAction("全部刷新", self)
+        refresh_action.triggered.connect(self.refresh_all)
+        toolbar.addAction(refresh_action)
+
+        toolbar.addSeparator()
 
         exit_action = QAction("退出", self)
         exit_action.triggered.connect(self.close)
@@ -114,14 +144,26 @@ class MainWindow(QMainWindow):
     def _connect_signals(self):
         self.drip_point_panel.point_selected.connect(self._on_point_selected)
         self.drip_point_panel.data_changed.connect(self.refresh_all)
+        self.cave_panel.data_changed.connect(self.refresh_all)
+        self.cave_panel.area_selected.connect(self._on_area_selected)
+        self.device_panel.data_changed.connect(self.refresh_all)
         self.data_import_panel.data_imported.connect(self.refresh_all)
+        self.qc_panel.data_changed.connect(self.refresh_all)
         self.anomaly_panel.anomalies_updated.connect(self._on_anomalies_updated)
+        self.dashboard_panel.data_changed.connect(self.refresh_all)
+        self.handling_panel.data_changed.connect(self.refresh_all)
+        self.statistics_panel.data_changed.connect(self.refresh_all)
+        self.report_panel.data_changed.connect(self.refresh_all)
 
     def _on_point_selected(self, point_id: int):
         self.current_point_id = point_id
         self.anomaly_panel.set_selected_point(point_id)
+        self.qc_panel.set_selected_point(point_id)
         self._on_refresh_chart()
         self._update_status()
+
+    def _on_area_selected(self, area_id: int):
+        self._on_refresh_chart()
 
     def _on_anomalies_updated(self):
         self.detector = self.anomaly_panel.get_detector()
@@ -131,11 +173,20 @@ class MainWindow(QMainWindow):
         self._on_refresh_chart()
 
     def _on_refresh_chart(self):
+        chart_type = self.chart_type_combo.currentData()
+
+        if chart_type == "joint":
+            self._plot_joint_analysis()
+            return
+
+        if chart_type == "period_stats":
+            self._plot_period_stats()
+            return
+
         if self.current_point_id is None:
             self.chart_view.clear()
             return
 
-        chart_type = self.chart_type_combo.currentData()
         data = self.db.get_monitoring_data(self.current_point_id)
 
         if chart_type == "rhythm":
@@ -147,6 +198,45 @@ class MainWindow(QMainWindow):
         elif chart_type == "anomaly":
             result = self.detector.detect_anomalies(data)
             self.chart_view.plot_anomaly(result)
+
+    def _plot_joint_analysis(self):
+        areas = self.db.get_all_cave_areas()
+        if not areas:
+            self.chart_view.clear()
+            return
+
+        area = areas[0]
+        points = self.db.get_drip_points_by_area(area["id"])
+        if len(points) < 2:
+            self.chart_view.clear()
+            return
+
+        points_data = {}
+        for p in points:
+            data = self.db.get_monitoring_data(p["id"])
+            if data:
+                points_data[p["id"]] = {
+                    "code": p["code"],
+                    "name": p["name"],
+                    "data": data
+                }
+
+        if len(points_data) < 2:
+            self.chart_view.clear()
+            return
+
+        result = AdvancedAnomalyDetector.joint_analysis(
+            area["id"], f"{area['code']} - {area['name']}", points_data
+        )
+        self.chart_view.plot_joint_analysis(result, points_data)
+
+    def _plot_period_stats(self):
+        if self.current_point_id is None:
+            self.chart_view.clear()
+            return
+        from core.statistics import StatisticsAnalyzer
+        day_stats = StatisticsAnalyzer.analyze_period(self.db, self.current_point_id, "day")
+        self.chart_view.plot_period_statistics(day_stats)
 
     def _on_export_chart(self):
         if self.current_point_id is None:
@@ -170,24 +260,39 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, "关于",
             "<h3>海蚀洞滴水监测数据管理系统</h3>"
-            "<p>版本: 1.0</p>"
+            "<p>版本: 2.0</p>"
             "<p>用于地质和洞穴研究团队整理海蚀洞内的滴水监测数据。</p>"
             "<p><b>主要功能:</b></p>"
             "<ul>"
+            "<li>洞区分层管理（洞区 → 子区域 → 滴水点）</li>"
+            "<li>设备档案与校准记录</li>"
             "<li>滴水点建档与管理</li>"
-            "<li>滴水间隔、温度、湿度、盐度数据导入</li>"
+            "<li>CSV 数据导入与导入前数据质控</li>"
             "<li>节律曲线可视化</li>"
             "<li>季节数据对比分析</li>"
-            "<li>异常波动检测与风险等级判定</li>"
+            "<li>异常检测（断档/持续偏高/持续偏低/突变/堵塞/渗流增强）</li>"
+            "<li>异常预警看板与风险等级</li>"
+            "<li>处理记录追踪</li>"
+            "<li>按日/周/月统计分析</li>"
+            "<li>多滴水点联合分析与相关性</li>"
+            "<li>报告导出（月度/异常/联合分析）</li>"
             "</ul>"
             "<p><b>技术栈:</b> Python + PySide6 + SQLite + Matplotlib</p>"
         )
 
     def refresh_all(self):
+        self.cave_panel.refresh_areas()
         self.drip_point_panel.refresh()
+        self.device_panel.refresh()
         self.data_import_panel.refresh_points()
+        self.qc_panel.refresh_points()
+        self.qc_panel.refresh()
         self.anomaly_panel.refresh_points()
         self.anomaly_panel.refresh()
+        self.dashboard_panel.refresh()
+        self.handling_panel.refresh()
+        self.statistics_panel.refresh_points()
+        self.report_panel.refresh()
 
         if self.current_point_id:
             point = self.db.get_drip_point(self.current_point_id)
@@ -202,11 +307,20 @@ class MainWindow(QMainWindow):
         self._update_status()
 
     def _update_status(self):
-        points = self.db.get_all_drip_points()
-        total_data = sum(self.db.get_monitoring_data_count(p["id"]) for p in points)
-        total_anomalies = len(self.db.get_anomaly_records())
+        stats = self.db.get_overall_statistics()
+        total_data = stats.get("data_count", 0)
+        total_points = stats.get("point_count", 0)
+        pending = stats.get("pending_anomalies", 0)
 
-        status_text = f"滴水点: {len(points)} | 监测数据: {total_data} 条 | 异常记录: {total_anomalies} 条"
+        status_text = (
+            f"洞区: {stats.get('area_count', 0)} | "
+            f"子区域: {stats.get('zone_count', 0)} | "
+            f"滴水点: {total_points} | "
+            f"监测数据: {total_data} 条 | "
+            f"设备: {stats.get('device_count', 0)} | "
+            f"待处理异常: {pending}"
+        )
+
         if self.current_point_id:
             point = self.db.get_drip_point(self.current_point_id)
             if point:

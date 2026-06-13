@@ -1,7 +1,9 @@
 import csv
 import os
+import numpy as np
 from datetime import datetime
 from typing import List, Dict, Tuple, Optional
+from dataclasses import dataclass, field
 import re
 
 
@@ -229,3 +231,193 @@ class DataImporter:
                     round(85.0 + random.uniform(-5, 5), 1),
                     round(32.0 + random.uniform(-1, 1), 1),
                 ])
+
+
+@dataclass
+class QualityCheckResult:
+    passed: bool
+    total_rows: int
+    issues: List[Dict]
+    error_count: int
+    warning_count: int
+    info_count: int
+    quality_score: float
+    suggestions: List[str]
+
+
+class DataQualityChecker:
+    RANGES = {
+        "drip_interval": (0.1, 3600.0),
+        "temperature": (-20.0, 60.0),
+        "humidity": (0.0, 100.0),
+        "salinity": (0.0, 100.0),
+    }
+
+    def __init__(self):
+        self.expected_interval_minutes = 60
+        self.issues: List[Dict] = []
+
+    def _add_issue(self, check_type: str, row_num: int, field_name: str,
+                   original_value: str, description: str, severity: str = "warning"):
+        self.issues.append({
+            "check_type": check_type,
+            "row_num": row_num,
+            "field_name": field_name,
+            "original_value": original_value,
+            "issue_description": description,
+            "severity": severity,
+        })
+
+    def check_range(self, data_list: List[Dict]):
+        for idx, data in enumerate(data_list):
+            row_num = idx + 2
+            for field, (min_val, max_val) in self.RANGES.items():
+                value = data.get(field)
+                if value is not None:
+                    if value < min_val or value > max_val:
+                        self._add_issue(
+                            "range_check", row_num, field, str(value),
+                            f"{field}值 {value} 超出合理范围 [{min_val}, {max_val}]",
+                            "error" if field == "drip_interval" else "warning"
+                        )
+
+    def check_duplicates(self, data_list: List[Dict]):
+        time_map: Dict[str, List[int]] = {}
+        for idx, data in enumerate(data_list):
+            row_num = idx + 2
+            record_time = data.get("record_time", "")
+            if record_time in time_map:
+                time_map[record_time].append(row_num)
+            else:
+                time_map[record_time] = [row_num]
+        
+        for record_time, rows in time_map.items():
+            if len(rows) > 1:
+                self._add_issue(
+                    "duplicate_check", rows[0], "record_time", record_time,
+                    f"时间戳重复，涉及行号: {', '.join(map(str, rows))}",
+                    "warning"
+                )
+
+    def check_time_order(self, data_list: List[Dict]):
+        for i in range(1, len(data_list)):
+            prev_time = data_list[i-1].get("record_time", "")
+            curr_time = data_list[i].get("record_time", "")
+            if prev_time > curr_time:
+                self._add_issue(
+                    "time_order_check", i + 2, "record_time", curr_time,
+                    f"时间顺序错误，前一行为 {prev_time}",
+                    "error"
+                )
+
+    def check_time_gaps(self, data_list: List[Dict]):
+        expected_gap = self.expected_interval_minutes * 60
+        for i in range(1, len(data_list)):
+            try:
+                t1 = datetime.strptime(data_list[i-1]["record_time"], "%Y-%m-%d %H:%M:%S")
+                t2 = datetime.strptime(data_list[i]["record_time"], "%Y-%m-%d %H:%M:%S")
+                gap = (t2 - t1).total_seconds()
+                
+                if gap > expected_gap * 3:
+                    self._add_issue(
+                        "time_gap_check", i + 2, "record_time", data_list[i]["record_time"],
+                        f"数据间隔过大，约 {gap/60:.0f} 分钟，预期约 {self.expected_interval_minutes} 分钟",
+                        "warning"
+                    )
+            except (KeyError, ValueError):
+                continue
+
+    def check_outliers_iqr(self, data_list: List[Dict], field: str, threshold: float = 3.0):
+        values = [d[field] for d in data_list if d.get(field) is not None]
+        if len(values) < 10:
+            return
+        
+        q1 = np.percentile(values, 25)
+        q3 = np.percentile(values, 75)
+        iqr = q3 - q1
+        if iqr == 0:
+            return
+        
+        lower_bound = q1 - threshold * iqr
+        upper_bound = q3 + threshold * iqr
+        
+        for idx, data in enumerate(data_list):
+            value = data.get(field)
+            if value is not None and (value < lower_bound or value > upper_bound):
+                self._add_issue(
+                    "outlier_check", idx + 2, field, str(value),
+                    f"{field}值 {value} 疑似异常（IQR方法，范围 [{lower_bound:.2f}, {upper_bound:.2f}]）",
+                    "warning"
+                )
+
+    def check_missing_values(self, data_list: List[Dict]):
+        required_fields = ["record_time", "drip_interval"]
+        for idx, data in enumerate(data_list):
+            row_num = idx + 2
+            for field in required_fields:
+                if data.get(field) is None or data.get(field) == "":
+                    self._add_issue(
+                        "missing_check", row_num, field, "",
+                        f"{field} 缺失必填值",
+                        "critical"
+                    )
+
+    def run_quality_check(self, data_list: List[Dict]) -> QualityCheckResult:
+        self.issues = []
+        
+        self.check_missing_values(data_list)
+        self.check_range(data_list)
+        self.check_duplicates(data_list)
+        self.check_time_order(data_list)
+        self.check_time_gaps(data_list)
+        
+        if data_list:
+            self.check_outliers_iqr(data_list, "drip_interval")
+            self.check_outliers_iqr(data_list, "temperature")
+            self.check_outliers_iqr(data_list, "humidity")
+            self.check_outliers_iqr(data_list, "salinity")
+        
+        error_count = sum(1 for i in self.issues if i["severity"] in ["error", "critical"])
+        warning_count = sum(1 for i in self.issues if i["severity"] == "warning")
+        info_count = sum(1 for i in self.issues if i["severity"] == "info")
+        
+        total_rows = len(data_list)
+        max_possible_score = total_rows * 10
+        penalty = error_count * 10 + warning_count * 3
+        quality_score = max(0, min(100, (max_possible_score - penalty) / max_possible_score * 100))
+        
+        suggestions = []
+        if error_count > 0:
+            suggestions.append(f"存在 {error_count} 个严重问题，建议修复后再导入")
+        if warning_count > 5:
+            suggestions.append("警告较多，建议核查数据质量")
+        if quality_score < 60:
+            suggestions.append("数据质量较低，建议检查数据源")
+        
+        passed = error_count == 0 and quality_score >= 60
+        
+        return QualityCheckResult(
+            passed=passed,
+            total_rows=total_rows,
+            issues=self.issues.copy(),
+            error_count=error_count,
+            warning_count=warning_count,
+            info_count=info_count,
+            quality_score=round(quality_score, 2),
+            suggestions=suggestions
+        )
+
+    def save_qc_records_to_db(self, db, qc_result: QualityCheckResult,
+                              batch_id: Optional[int] = None,
+                              drip_point_id: Optional[int] = None):
+        for issue in qc_result.issues:
+            db.add_qc_record(
+                check_type=issue["check_type"],
+                row_num=issue["row_num"],
+                field_name=issue["field_name"],
+                original_value=issue["original_value"],
+                issue_description=issue["issue_description"],
+                severity=issue["severity"],
+                batch_id=batch_id,
+                drip_point_id=drip_point_id
+            )

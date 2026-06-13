@@ -2,43 +2,87 @@ from typing import Optional, Dict, List
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget, QTableWidgetItem,
     QFileDialog, QMessageBox, QHeaderView, QLabel, QGroupBox, QComboBox,
-    QAbstractItemView, QTextEdit, QProgressBar, QSplitter
+    QAbstractItemView, QTextEdit, QProgressBar, QSplitter, QCheckBox
 )
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QColor
 
 from database.db_manager import get_db
-from core.data_import import DataImporter
+from core.data_import import DataImporter, DataQualityChecker
 
 
 class ImportWorker(QThread):
     progress = Signal(int, int)
     finished = Signal(bool, str, int, int, list)
 
-    def __init__(self, point_id: int, file_path: str):
+    def __init__(self, point_id: int, file_path: str, run_qc: bool = True):
         super().__init__()
         self.point_id = point_id
         self.file_path = file_path
-        self.db = get_db()
+        self.run_qc = run_qc
 
     def run(self):
         try:
             self.progress.emit(10, 100)
             success, error, data, parse_errors = DataImporter.import_csv(self.file_path)
-            
+
             if not success:
                 self.finished.emit(False, error, 0, 0, parse_errors)
                 return
-            
-            self.progress.emit(50, 100)
-            
-            success, error, success_count, skip_count = self.db.batch_add_monitoring_data(
-                self.point_id, data
+
+            self.progress.emit(30, 100)
+
+            batch_id = None
+            quality_score = None
+
+            if self.run_qc and data:
+                checker = DataQualityChecker()
+                qc_result = checker.run_quality_check(data)
+                quality_score = qc_result.quality_score
+
+                self.progress.emit(50, 100)
+
+                db = get_db()
+                ok, msg, batch_id = db.add_import_batch(
+                    drip_point_id=self.point_id,
+                    file_name=self.file_path,
+                    total_count=qc_result.total_rows,
+                    success_count=0,
+                    error_count=qc_result.error_count,
+                    quality_score=quality_score,
+                    imported_by=""
+                )
+
+                if batch_id:
+                    checker.save_qc_records_to_db(db, qc_result, batch_id, self.point_id)
+
+                self.progress.emit(60, 100)
+
+                if not qc_result.passed:
+                    self.finished.emit(
+                        False,
+                        f"数据质量检查未通过（评分: {quality_score:.1f}），请先在【数据质控】中处理问题",
+                        0, 0, parse_errors
+                    )
+                    return
+
+            self.progress.emit(70, 100)
+
+            db = get_db()
+            success, error, success_count, skip_count = db.batch_add_monitoring_data_with_qc(
+                self.point_id, data, batch_id
             )
-            
+
+            if batch_id and success_count > 0:
+                db.execute(
+                    "UPDATE data_import_batches SET success_count=?, error_count=? WHERE id=?",
+                    (success_count, skip_count, batch_id)
+                )
+                db.commit()
+
             self.progress.emit(100, 100)
             self.finished.emit(success, error, success_count, skip_count, parse_errors)
-            
+
         except Exception as e:
             self.finished.emit(False, str(e), 0, 0, [])
 
@@ -52,6 +96,7 @@ class DataImportPanel(QWidget):
         self.current_file_path = ""
         self.preview_header: List[str] = []
         self.preview_data: List[Dict] = []
+        self.parsed_data: List[Dict] = []
         self.worker: Optional[ImportWorker] = None
         self._init_ui()
         self.refresh_points()
@@ -80,18 +125,30 @@ class DataImportPanel(QWidget):
         file_layout.addWidget(self.browse_btn)
         top_layout.addLayout(file_layout)
 
+        option_layout = QHBoxLayout()
+        self.qc_check = QCheckBox("导入前数据质控")
+        self.qc_check.setChecked(True)
+        self.qc_check.setToolTip("启用后，导入前自动运行数据质量检查，不通过则拒绝导入")
+        option_layout.addWidget(self.qc_check)
+        option_layout.addStretch()
+        top_layout.addLayout(option_layout)
+
         btn_layout = QHBoxLayout()
         self.preview_btn = QPushButton("预览数据")
         self.preview_btn.clicked.connect(self._on_preview)
+        self.qc_run_btn = QPushButton("运行质控")
+        self.qc_run_btn.clicked.connect(self._on_run_qc)
         self.import_btn = QPushButton("开始导入")
         self.import_btn.clicked.connect(self._on_import)
         self.generate_btn = QPushButton("生成示例文件")
         self.generate_btn.clicked.connect(self._on_generate_sample)
 
         self.preview_btn.setEnabled(False)
+        self.qc_run_btn.setEnabled(False)
         self.import_btn.setEnabled(False)
 
         btn_layout.addWidget(self.preview_btn)
+        btn_layout.addWidget(self.qc_run_btn)
         btn_layout.addWidget(self.import_btn)
         btn_layout.addStretch()
         btn_layout.addWidget(self.generate_btn)
@@ -100,6 +157,10 @@ class DataImportPanel(QWidget):
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         top_layout.addWidget(self.progress_bar)
+
+        self.qc_summary_label = QLabel("")
+        self.qc_summary_label.setWordWrap(True)
+        top_layout.addWidget(self.qc_summary_label)
 
         main_layout.addWidget(top_group)
 
@@ -152,6 +213,7 @@ class DataImportPanel(QWidget):
             self.file_path_edit.addItem(file_path)
             self.file_path_edit.setCurrentText(file_path)
             self.preview_btn.setEnabled(True)
+            self.qc_run_btn.setEnabled(False)
             self.import_btn.setEnabled(False)
             self._append_log(f"已选择文件: {file_path}")
 
@@ -170,8 +232,17 @@ class DataImportPanel(QWidget):
         self.preview_header = header
         self.preview_data = preview_data
         self._show_preview(header, preview_data)
+        self.qc_run_btn.setEnabled(True)
         self.import_btn.setEnabled(True)
         self._append_log(f"文件验证通过，共找到 {len(header)} 列数据")
+
+        success, error, data, parse_errors = DataImporter.import_csv(file_path)
+        if success:
+            self.parsed_data = data
+            self._append_log(f"解析完成: {len(data)} 条有效数据")
+        else:
+            self.parsed_data = []
+            self._append_log(f"解析失败: {error}")
 
     def _show_preview(self, header: List[str], data: List[Dict]):
         self.preview_table.clear()
@@ -194,6 +265,65 @@ class DataImportPanel(QWidget):
                     self.preview_table.setItem(row, col, table_item)
 
         self.preview_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+
+    def _on_run_qc(self):
+        file_path = self.file_path_edit.currentText().strip()
+        if not file_path:
+            QMessageBox.warning(self, "提示", "请先选择文件")
+            return
+
+        if not self.parsed_data:
+            success, error, data, _ = DataImporter.import_csv(file_path)
+            if not success:
+                QMessageBox.warning(self, "提示", f"文件解析失败: {error}")
+                return
+            self.parsed_data = data
+
+        if not self.parsed_data:
+            QMessageBox.information(self, "提示", "没有可检查的数据")
+            return
+
+        checker = DataQualityChecker()
+        result = checker.run_quality_check(self.parsed_data)
+
+        summary = (
+            f"质量评分: {result.quality_score:.1f}/100 | "
+            f"结果: {'✅ 通过' if result.passed else '❌ 未通过'} | "
+            f"严重问题: {result.error_count} | "
+            f"警告: {result.warning_count} | "
+            f"提示: {result.info_count}"
+        )
+        self.qc_summary_label.setText(summary)
+
+        if result.passed:
+            self.qc_summary_label.setStyleSheet("color: #2ca02c; font-weight: bold;")
+        else:
+            self.qc_summary_label.setStyleSheet("color: #d62728; font-weight: bold;")
+
+        log_lines = [f"数据质量检查完成: 评分 {result.quality_score:.1f}"]
+        if result.error_count > 0:
+            log_lines.append(f"  严重问题 {result.error_count} 项")
+        if result.warning_count > 0:
+            log_lines.append(f"  警告 {result.warning_count} 项")
+
+        for issue in result.issues[:10]:
+            severity_map = {"critical": "🔴", "error": "🔴", "warning": "🟡", "info": "🔵"}
+            icon = severity_map.get(issue["severity"], "⚪")
+            log_lines.append(f"  {icon} 行{issue['row_num']} {issue['field_name']}: {issue['issue_description']}")
+
+        if len(result.issues) > 10:
+            log_lines.append(f"  ... 还有 {len(result.issues) - 10} 项问题")
+
+        if result.suggestions:
+            for s in result.suggestions:
+                log_lines.append(f"  💡 {s}")
+
+        self._append_log("\n".join(log_lines))
+
+        if not result.passed:
+            self.import_btn.setEnabled(False)
+        else:
+            self.import_btn.setEnabled(True)
 
     def _on_import(self):
         if self.point_combo.count() == 0:
@@ -219,7 +349,8 @@ class DataImportPanel(QWidget):
         self._set_busy(True)
         self._append_log("开始导入...")
 
-        self.worker = ImportWorker(point_id, file_path)
+        run_qc = self.qc_check.isChecked()
+        self.worker = ImportWorker(point_id, file_path, run_qc)
         self.worker.progress.connect(self._on_progress)
         self.worker.finished.connect(self._on_import_finished)
         self.worker.start()
@@ -266,6 +397,7 @@ class DataImportPanel(QWidget):
     def _set_busy(self, busy: bool):
         self.browse_btn.setEnabled(not busy)
         self.preview_btn.setEnabled(not busy and bool(self.current_file_path))
+        self.qc_run_btn.setEnabled(not busy and bool(self.current_file_path))
         self.import_btn.setEnabled(not busy and bool(self.current_file_path))
         self.generate_btn.setEnabled(not busy)
         self.point_combo.setEnabled(not busy)
