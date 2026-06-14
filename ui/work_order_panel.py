@@ -12,10 +12,13 @@ from PySide6.QtCore import QUrl
 
 from database.db_manager import get_db
 from core.anomaly_detector import (
-    ANOMALY_TYPES, RISK_LEVELS,
+    ANOMALY_TYPES, RISK_LEVELS, ANOMALY_TYPE_NAMES,
     WORK_ORDER_STATUSES, WORK_ORDER_STATUS_COLORS,
     WORK_ORDER_PRIORITIES, WORK_ORDER_PRIORITY_COLORS,
-    WORK_ORDER_STATUS_FLOW
+    WORK_ORDER_STATUS_FLOW, WORK_ORDER_NEEDS_APPROVAL_PRIORITIES,
+    ESCALATION_LEVELS, ESCALATION_LEVEL_NAMES, ESCALATION_LEVEL_COLORS,
+    REMINDER_TYPES, REMINDER_TYPE_NAMES, REMINDER_TYPE_COLORS,
+    WORK_ORDER_ACTION_TYPES, APPROVAL_STATUSES
 )
 import os
 
@@ -692,6 +695,271 @@ class WorkOrderDetailDialog(QDialog):
                 QMessageBox.warning(self, "失败", msg)
 
 
+class BatchAssignDialog(QDialog):
+    def __init__(self, parent=None, work_order_ids: Optional[List[int]] = None):
+        super().__init__(parent)
+        self.work_order_ids = work_order_ids or []
+        self.db = get_db()
+        self.setWindowTitle(f"批量派单 ({len(self.work_order_ids)} 个工单)")
+        self.setMinimumWidth(420)
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QFormLayout(self)
+
+        self.assignee_combo = QComboBox()
+        users = self.db.get_all_users(role="inspector")
+        self.assignee_combo.addItem("请选择巡检人员", None)
+        for u in users:
+            self.assignee_combo.addItem(u["real_name"], u["real_name"])
+        layout.addRow("指派给 *:", self.assignee_combo)
+
+        self.plan_time_edit = QDateTimeEdit()
+        self.plan_time_edit.setCalendarPopup(True)
+        self.plan_time_edit.setDisplayFormat("yyyy-MM-dd HH:mm")
+        self.plan_time_edit.setDateTime(QDateTime.currentDateTime().addDays(1))
+        layout.addRow("计划巡检时间 *:", self.plan_time_edit)
+
+        self.priority_combo = QComboBox()
+        for p in WORK_ORDER_PRIORITIES:
+            self.priority_combo.addItem(p, p)
+        self.priority_combo.setCurrentText("普通")
+        layout.addRow("优先级:", self.priority_combo)
+
+        self.notes_edit = QTextEdit()
+        self.notes_edit.setPlaceholderText("派单备注（可选）")
+        self.notes_edit.setMaximumHeight(80)
+        layout.addRow("备注:", self.notes_edit)
+
+        btn_layout = QHBoxLayout()
+        ok_btn = QPushButton("确定派单")
+        cancel_btn = QPushButton("取消")
+        ok_btn.setStyleSheet("QPushButton { background: #409EFF; color: white; border: none; padding: 8px 20px; border-radius: 4px; } QPushButton:hover { background: #66b1ff; }")
+        ok_btn.clicked.connect(self._on_ok)
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addStretch()
+        btn_layout.addWidget(ok_btn)
+        btn_layout.addWidget(cancel_btn)
+        layout.addRow(btn_layout)
+
+    def _on_ok(self):
+        assignee = self.assignee_combo.currentData()
+        if not assignee:
+            QMessageBox.warning(self, "提示", "请选择巡检人员")
+            return
+        self.accept()
+
+    def get_data(self) -> Dict:
+        return {
+            "assignee": self.assignee_combo.currentData(),
+            "plan_inspect_time": self.plan_time_edit.dateTime().toString("yyyy-MM-dd HH:mm:ss"),
+            "priority": self.priority_combo.currentData(),
+            "notes": self.notes_edit.toPlainText().strip()
+        }
+
+
+class RecheckReminderDialog(QDialog):
+    def __init__(self, parent=None, work_order_id: Optional[int] = None):
+        super().__init__(parent)
+        self.work_order_id = work_order_id
+        self.db = get_db()
+        self.setWindowTitle("发送复检提醒")
+        self.setMinimumWidth(420)
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QFormLayout(self)
+
+        self.recipient_combo = QComboBox()
+        users = self.db.get_all_users(role="inspector")
+        self.recipient_combo.addItem("请选择提醒对象", None)
+        for u in users:
+            self.recipient_combo.addItem(u["real_name"], u["real_name"])
+        layout.addRow("提醒对象 *:", self.recipient_combo)
+
+        self.due_date_edit = QDateEdit()
+        self.due_date_edit.setCalendarPopup(True)
+        self.due_date_edit.setDisplayFormat("yyyy-MM-dd")
+        self.due_date_edit.setDate(QDate.currentDate().addDays(3))
+        layout.addRow("复检截止日期 *:", self.due_date_edit)
+
+        self.content_edit = QTextEdit()
+        self.content_edit.setPlaceholderText("提醒内容，如：请尽快完成以下工单的复检工作...")
+        self.content_edit.setPlainText("请尽快完成该工单的复检工作，确认异常已解决。")
+        self.content_edit.setMaximumHeight(100)
+        layout.addRow("提醒内容 *:", self.content_edit)
+
+        btn_layout = QHBoxLayout()
+        ok_btn = QPushButton("发送提醒")
+        cancel_btn = QPushButton("取消")
+        ok_btn.setStyleSheet("QPushButton { background: #E6A23C; color: white; border: none; padding: 8px 20px; border-radius: 4px; } QPushButton:hover { background: #f5d76e; }")
+        ok_btn.clicked.connect(self._on_ok)
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addStretch()
+        btn_layout.addWidget(ok_btn)
+        btn_layout.addWidget(cancel_btn)
+        layout.addRow(btn_layout)
+
+    def _on_ok(self):
+        recipient = self.recipient_combo.currentData()
+        if not recipient:
+            QMessageBox.warning(self, "提示", "请选择提醒对象")
+            return
+        content = self.content_edit.toPlainText().strip()
+        if not content:
+            QMessageBox.warning(self, "提示", "请输入提醒内容")
+            return
+        self.accept()
+
+    def get_data(self) -> Dict:
+        return {
+            "work_order_id": self.work_order_id,
+            "recipient": self.recipient_combo.currentData(),
+            "due_date": self.due_date_edit.date().toString("yyyy-MM-dd"),
+            "content": self.content_edit.toPlainText().strip()
+        }
+
+
+class EscalationDialog(QDialog):
+    def __init__(self, parent=None, work_order_id: Optional[int] = None, current_level: int = 0):
+        super().__init__(parent)
+        self.work_order_id = work_order_id
+        self.current_level = current_level
+        self.db = get_db()
+        self.setWindowTitle("工单升级")
+        self.setMinimumWidth(420)
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QFormLayout(self)
+
+        current_label = QLabel(f"当前升级级别: <b>{ESCALATION_LEVEL_NAMES.get(self.current_level, '普通')}</b>")
+        current_label.setTextFormat(Qt.RichText)
+        layout.addRow(current_label)
+
+        next_level = min(self.current_level + 1, 3)
+        level_name = ESCALATION_LEVEL_NAMES.get(next_level, "紧急升级")
+        level_color = ESCALATION_LEVEL_COLORS.get(next_level, "#F56C6C")
+        level_label = QLabel(f"拟升级为: <b><span style='color:{level_color}'>{level_name}</span></b>")
+        level_label.setTextFormat(Qt.RichText)
+        layout.addRow(level_label)
+
+        self.escalate_to_combo = QComboBox()
+        managers = self.db.get_all_users(role="manager")
+        self.escalate_to_combo.addItem("请选择上报领导", None)
+        for m in managers:
+            self.escalate_to_combo.addItem(m["real_name"], m["real_name"])
+        layout.addRow("上报给 *:", self.escalate_to_combo)
+
+        self.reason_edit = QTextEdit()
+        self.reason_edit.setPlaceholderText("升级原因说明，如：问题复杂、多次处理仍未解决、存在重大安全隐患等...")
+        self.reason_edit.setMaximumHeight(100)
+        layout.addRow("升级原因 *:", self.reason_edit)
+
+        btn_layout = QHBoxLayout()
+        ok_btn = QPushButton("确认升级")
+        cancel_btn = QPushButton("取消")
+        ok_btn.setStyleSheet("QPushButton { background: #F56C6C; color: white; border: none; padding: 8px 20px; border-radius: 4px; } QPushButton:hover { background: #f78989; }")
+        ok_btn.clicked.connect(self._on_ok)
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addStretch()
+        btn_layout.addWidget(ok_btn)
+        btn_layout.addWidget(cancel_btn)
+        layout.addRow(btn_layout)
+
+    def _on_ok(self):
+        escalate_to = self.escalate_to_combo.currentData()
+        if not escalate_to:
+            QMessageBox.warning(self, "提示", "请选择上报领导")
+            return
+        reason = self.reason_edit.toPlainText().strip()
+        if not reason:
+            QMessageBox.warning(self, "提示", "请输入升级原因")
+            return
+        self.accept()
+
+    def get_data(self) -> Dict:
+        return {
+            "work_order_id": self.work_order_id,
+            "new_level": min(self.current_level + 1, 3),
+            "escalate_to": self.escalate_to_combo.currentData(),
+            "reason": self.reason_edit.toPlainText().strip()
+        }
+
+
+class WorkOrderHistoryDialog(QDialog):
+    def __init__(self, parent=None, work_order_id: Optional[int] = None):
+        super().__init__(parent)
+        self.work_order_id = work_order_id
+        self.db = get_db()
+        self.setWindowTitle("工单历史记录")
+        self.setMinimumWidth(600)
+        self.setMinimumHeight(500)
+        self._init_ui()
+        self._load_history()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+
+        self.history_table = QTableWidget()
+        self.history_table.setColumnCount(5)
+        self.history_table.setHorizontalHeaderLabels([
+            "时间", "操作类型", "操作人", "详情", "备注"
+        ])
+        self.history_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.history_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.history_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.history_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.history_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.history_table.setAlternatingRowColors(True)
+        self.history_table.setStyleSheet("alternate-background-color: #f5f7fa;")
+        layout.addWidget(self.history_table)
+
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(self.accept)
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        btn_layout.addWidget(close_btn)
+        layout.addLayout(btn_layout)
+
+    def _load_history(self):
+        if not self.work_order_id:
+            return
+        history = self.db.get_work_order_history(self.work_order_id)
+        self.history_table.setRowCount(len(history))
+        
+        for row, h in enumerate(history):
+            self.history_table.setItem(row, 0, QTableWidgetItem(h.get("created_at", "-")))
+            
+            action = h.get("action_type", "")
+            action_name = WORK_ORDER_ACTION_TYPES.get(action, action)
+            action_item = QTableWidgetItem(action_name)
+            
+            if action in ("create", "status_change"):
+                action_item.setForeground(QColor("#409EFF"))
+            elif action == "escalate":
+                action_item.setForeground(QColor("#F56C6C"))
+                action_item.setFont(QFont("", -1, QFont.Bold))
+            elif action == "approve":
+                action_item.setForeground(QColor("#67C23A"))
+            elif action == "reject":
+                action_item.setForeground(QColor("#F56C6C"))
+            elif action == "recheck":
+                action_item.setForeground(QColor("#E6A23C"))
+            elif action == "reminder":
+                action_item.setForeground(QColor("#E6A23C"))
+            
+            self.history_table.setItem(row, 1, action_item)
+            self.history_table.setItem(row, 2, QTableWidgetItem(h.get("operator", "-")))
+            self.history_table.setItem(row, 3, QTableWidgetItem(h.get("details", "-")))
+            self.history_table.setItem(row, 4, QTableWidgetItem(h.get("notes", "-") or "-"))
+            
+            for col in range(5):
+                item = self.history_table.item(row, col)
+                if item:
+                    item.setTextAlignment(Qt.AlignCenter)
+
+
 class WorkOrderPanel(QWidget):
     data_changed = Signal()
 
@@ -792,28 +1060,59 @@ class WorkOrderPanel(QWidget):
         self.add_btn.clicked.connect(self._on_add_order)
         self.detail_btn = QPushButton("查看详情")
         self.detail_btn.clicked.connect(self._on_view_detail)
+        self.detail_btn.setEnabled(False)
+        self.history_btn = QPushButton("历史记录")
+        self.history_btn.clicked.connect(self._on_view_history)
+        self.history_btn.setEnabled(False)
+        self.batch_assign_btn = QPushButton("批量派单")
+        self.batch_assign_btn.clicked.connect(self._on_batch_assign)
+        self.batch_assign_btn.setEnabled(False)
+        self.batch_assign_btn.setStyleSheet("QPushButton { background: #409EFF; color: white; border: none; padding: 6px 16px; border-radius: 4px; } QPushButton:hover { background: #66b1ff; } QPushButton:disabled { background: #c0c4cc; }")
+        self.recheck_reminder_btn = QPushButton("复检提醒")
+        self.recheck_reminder_btn.clicked.connect(self._on_send_recheck_reminder)
+        self.recheck_reminder_btn.setEnabled(False)
+        self.recheck_reminder_btn.setStyleSheet("QPushButton { background: #E6A23C; color: white; border: none; padding: 6px 16px; border-radius: 4px; } QPushButton:hover { background: #f5d76e; } QPushButton:disabled { background: #c0c4cc; }")
+        self.escalate_btn = QPushButton("工单升级")
+        self.escalate_btn.clicked.connect(self._on_escalate)
+        self.escalate_btn.setEnabled(False)
+        self.escalate_btn.setStyleSheet("QPushButton { background: #F56C6C; color: white; border: none; padding: 6px 16px; border-radius: 4px; } QPushButton:hover { background: #f78989; } QPushButton:disabled { background: #c0c4cc; }")
+        self.auto_remind_btn = QPushButton("自动催办")
+        self.auto_remind_btn.clicked.connect(self._on_auto_remind)
+        self.auto_remind_btn.setStyleSheet("QPushButton { background: #67C23A; color: white; border: none; padding: 6px 16px; border-radius: 4px; } QPushButton:hover { background: #85ce61; }")
+        self.auto_escalate_btn = QPushButton("自动升级")
+        self.auto_escalate_btn.clicked.connect(self._on_auto_escalate)
+        self.auto_escalate_btn.setStyleSheet("QPushButton { background: #909399; color: white; border: none; padding: 6px 16px; border-radius: 4px; } QPushButton:hover { background: #a6a9ad; }")
         self.refresh_btn = QPushButton("刷新")
         self.refresh_btn.clicked.connect(self.refresh)
+        
         btn_layout.addWidget(self.add_btn)
         btn_layout.addWidget(self.detail_btn)
+        btn_layout.addWidget(self.history_btn)
+        btn_layout.addWidget(self.batch_assign_btn)
+        btn_layout.addWidget(self.recheck_reminder_btn)
+        btn_layout.addWidget(self.escalate_btn)
         btn_layout.addStretch()
+        btn_layout.addWidget(self.auto_remind_btn)
+        btn_layout.addWidget(self.auto_escalate_btn)
         btn_layout.addWidget(self.refresh_btn)
         order_layout.addLayout(btn_layout)
 
         self.order_table = QTableWidget()
-        self.order_table.setColumnCount(11)
+        self.order_table.setColumnCount(12)
         self.order_table.setHorizontalHeaderLabels([
-            "ID", "工单编号", "标题", "洞区", "滴水点", "异常类型",
+            "☑", "ID", "工单编号", "标题", "洞区", "滴水点", "异常类型",
             "风险等级", "责任人", "状态", "计划巡检时间", "创建时间"
         ])
         self.order_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.order_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.order_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.order_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.order_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.order_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.order_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.order_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.order_table.itemDoubleClicked.connect(self._on_view_detail)
         self.order_table.itemSelectionChanged.connect(self._on_selection_changed)
+        self.order_table.itemClicked.connect(self._on_item_clicked)
         order_layout.addWidget(self.order_table)
         splitter.addWidget(order_group)
 
@@ -938,8 +1237,45 @@ class WorkOrderPanel(QWidget):
         self.refresh()
 
     def _on_selection_changed(self):
-        has = len(self.order_table.selectedItems()) > 0
-        self.detail_btn.setEnabled(has)
+        has_single = len(self.order_table.selectionModel().selectedRows()) == 1
+        has_selection = len(self.order_table.selectionModel().selectedRows()) > 0
+        self.detail_btn.setEnabled(has_single)
+        self.history_btn.setEnabled(has_single)
+        self.recheck_reminder_btn.setEnabled(has_single)
+        self.escalate_btn.setEnabled(has_single)
+        self.batch_assign_btn.setEnabled(has_selection)
+
+    def _on_item_clicked(self, item: QTableWidgetItem):
+        if item.column() == 0:
+            checked_count = self._get_checked_count()
+            self.batch_assign_btn.setEnabled(checked_count > 0)
+
+    def _get_checked_order_ids(self) -> List[int]:
+        order_ids = []
+        for row in range(self.order_table.rowCount()):
+            item = self.order_table.item(row, 0)
+            if item and item.checkState() == Qt.Checked:
+                id_item = self.order_table.item(row, 1)
+                if id_item:
+                    order_ids.append(int(id_item.text()))
+        return order_ids
+
+    def _get_checked_count(self) -> int:
+        count = 0
+        for row in range(self.order_table.rowCount()):
+            item = self.order_table.item(row, 0)
+            if item and item.checkState() == Qt.Checked:
+                count += 1
+        return count
+
+    def _get_current_order_id(self) -> Optional[int]:
+        row = self.order_table.currentRow()
+        if row < 0:
+            return None
+        id_item = self.order_table.item(row, 1)
+        if id_item:
+            return int(id_item.text())
+        return None
 
     def refresh(self):
         self._refresh_orders()
@@ -965,16 +1301,22 @@ class WorkOrderPanel(QWidget):
 
         self.order_table.setRowCount(len(orders))
         for row, order in enumerate(orders):
-            self.order_table.setItem(row, 0, QTableWidgetItem(str(order["id"])))
-            self.order_table.setItem(row, 1, QTableWidgetItem(order.get("order_no", "-")))
-            self.order_table.setItem(row, 2, QTableWidgetItem(order.get("title", "-")))
-            self.order_table.setItem(row, 3, QTableWidgetItem(
+            check_item = QTableWidgetItem()
+            check_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            check_item.setCheckState(Qt.Unchecked)
+            check_item.setTextAlignment(Qt.AlignCenter)
+            self.order_table.setItem(row, 0, check_item)
+            
+            self.order_table.setItem(row, 1, QTableWidgetItem(str(order["id"])))
+            self.order_table.setItem(row, 2, QTableWidgetItem(order.get("order_no", "-")))
+            self.order_table.setItem(row, 3, QTableWidgetItem(order.get("title", "-")))
+            self.order_table.setItem(row, 4, QTableWidgetItem(
                 f"{order.get('area_code', '-')} - {order.get('area_name', '-')}" if order.get('area_code') else "-"
             ))
-            self.order_table.setItem(row, 4, QTableWidgetItem(
+            self.order_table.setItem(row, 5, QTableWidgetItem(
                 f"{order.get('drip_point_code', '-')} - {order.get('drip_point_name', '-')}" if order.get('drip_point_code') else "-"
             ))
-            self.order_table.setItem(row, 5, QTableWidgetItem(order.get("anomaly_type", "-")))
+            self.order_table.setItem(row, 6, QTableWidgetItem(order.get("anomaly_type", "-")))
 
             risk_item = QTableWidgetItem(order.get("risk_level", "-"))
             risk_colors = {
@@ -983,16 +1325,16 @@ class WorkOrderPanel(QWidget):
             }
             risk_color = risk_colors.get(order.get("risk_level", ""), QColor("#000"))
             risk_item.setForeground(risk_color)
-            self.order_table.setItem(row, 6, risk_item)
+            self.order_table.setItem(row, 7, risk_item)
 
-            self.order_table.setItem(row, 7, QTableWidgetItem(order.get("assignee", "-")))
+            self.order_table.setItem(row, 8, QTableWidgetItem(order.get("assignee", "-")))
 
             status_text = order.get("status", "-")
             status_item = QTableWidgetItem(status_text)
             status_color = QColor(WORK_ORDER_STATUS_COLORS.get(status_text, "#000000"))
             status_item.setForeground(status_color)
             status_item.setBackground(QBrush(status_color.lighter(190)))
-            self.order_table.setItem(row, 8, status_item)
+            self.order_table.setItem(row, 9, status_item)
 
             plan_time = order.get("plan_inspect_time", "-") or "-"
             plan_item = QTableWidgetItem(plan_time)
@@ -1000,11 +1342,11 @@ class WorkOrderPanel(QWidget):
                 plan_dt = QDateTime.fromString(order["plan_inspect_time"], "yyyy-MM-dd HH:mm:ss")
                 if plan_dt.isValid() and plan_dt < QDateTime.currentDateTime():
                     plan_item.setForeground(QColor("#d62728"))
-            self.order_table.setItem(row, 9, plan_item)
+            self.order_table.setItem(row, 10, plan_item)
 
-            self.order_table.setItem(row, 10, QTableWidgetItem(order.get("created_at", "-")))
+            self.order_table.setItem(row, 11, QTableWidgetItem(order.get("created_at", "-")))
 
-            for col in range(11):
+            for col in range(12):
                 item = self.order_table.item(row, col)
                 if item:
                     item.setTextAlignment(Qt.AlignCenter)
@@ -1065,25 +1407,208 @@ class WorkOrderPanel(QWidget):
         dialog = WorkOrderDialog(self)
         if dialog.exec() == QDialog.Accepted:
             data = dialog.get_data()
-            success, msg, _ = self.db.add_work_order(**data)
-            if success:
+            success, msg, order_id = self.db.add_work_order(**data)
+            if success and order_id:
+                priority = data.get("priority", "普通")
+                if priority in WORK_ORDER_NEEDS_APPROVAL_PRIORITIES:
+                    from ui.approval_panel import create_approval_for_work_order
+                    create_approval_for_work_order(self.db, order_id, priority)
+                
+                self.db.add_work_order_history(
+                    work_order_id=order_id,
+                    action_type="create",
+                    operator=data.get("assignee", "系统"),
+                    details=f"创建工单，优先级：{priority}",
+                    notes=data.get("notes", "")
+                )
                 QMessageBox.information(self, "成功", msg)
                 self.refresh()
             else:
                 QMessageBox.warning(self, "失败", msg)
 
     def _on_view_detail(self):
-        row = self.order_table.currentRow()
-        if row < 0:
+        order_id = self._get_current_order_id()
+        if not order_id:
             return
-        order_id = int(self.order_table.item(row, 0).text())
         dialog = WorkOrderDetailDialog(self, order_id=order_id)
         if dialog.exec() == QDialog.Accepted:
             self.refresh()
 
+    def _on_view_history(self):
+        order_id = self._get_current_order_id()
+        if not order_id:
+            return
+        dialog = WorkOrderHistoryDialog(self, work_order_id=order_id)
+        dialog.exec()
+
+    def _on_batch_assign(self):
+        order_ids = self._get_checked_order_ids()
+        if not order_ids:
+            order_ids = [self._get_current_order_id()] if self._get_current_order_id() else []
+        
+        if not order_ids:
+            QMessageBox.warning(self, "提示", "请先勾选或选择要派单的工单")
+            return
+        
+        pending_ids = []
+        for oid in order_ids:
+            order = self.db.get_work_order(oid)
+            if order and order.get("status") == "待处理":
+                pending_ids.append(oid)
+        
+        if not pending_ids:
+            QMessageBox.information(self, "提示", "所选工单中没有待处理状态的工单")
+            return
+        
+        dialog = BatchAssignDialog(self, work_order_ids=pending_ids)
+        if dialog.exec() == QDialog.Accepted:
+            data = dialog.get_data()
+            success, msg, assigned_count = self.db.batch_assign_work_orders(
+                work_order_ids=pending_ids,
+                assignee=data["assignee"],
+                plan_inspect_time=data["plan_inspect_time"],
+                priority=data.get("priority"),
+                notes=data.get("notes")
+            )
+            if success:
+                for oid in pending_ids:
+                    self.db.add_work_order_history(
+                        work_order_id=oid,
+                        action_type="assign",
+                        operator=data["assignee"],
+                        details=f"批量派单给 {data['assignee']}",
+                        notes=data.get("notes", "")
+                    )
+                    self.db.add_reminder(
+                        work_order_id=oid,
+                        reminder_type="assignment",
+                        recipient=data["assignee"],
+                        content=f"您有新的工单需要处理，请及时前往现场巡检。",
+                        due_date=data["plan_inspect_time"][:10]
+                    )
+                QMessageBox.information(self, "成功", f"{msg}\n共派单 {assigned_count} 个")
+                self.refresh()
+            else:
+                QMessageBox.warning(self, "失败", msg)
+
+    def _on_send_recheck_reminder(self):
+        order_id = self._get_current_order_id()
+        if not order_id:
+            return
+        
+        order = self.db.get_work_order(order_id)
+        if not order or order.get("status") != "待复检":
+            QMessageBox.warning(self, "提示", "只有待复检状态的工单才能发送复检提醒")
+            return
+        
+        dialog = RecheckReminderDialog(self, work_order_id=order_id)
+        if dialog.exec() == QDialog.Accepted:
+            data = dialog.get_data()
+            success, msg, reminder_id = self.db.add_reminder(
+                work_order_id=order_id,
+                reminder_type="recheck",
+                recipient=data["recipient"],
+                content=data["content"],
+                due_date=data["due_date"]
+            )
+            if success:
+                self.db.add_work_order_history(
+                    work_order_id=order_id,
+                    action_type="reminder",
+                    operator=data["recipient"],
+                    details=f"发送复检提醒给 {data['recipient']}",
+                    notes=data["content"]
+                )
+                QMessageBox.information(self, "成功", msg)
+                self.refresh()
+            else:
+                QMessageBox.warning(self, "失败", msg)
+
+    def _on_escalate(self):
+        order_id = self._get_current_order_id()
+        if not order_id:
+            return
+        
+        order = self.db.get_work_order(order_id)
+        if not order:
+            return
+        
+        escalations = self.db.get_work_order_escalations(order_id)
+        current_level = max([e.get("level", 0) for e in escalations], default=0)
+        
+        if current_level >= 3:
+            QMessageBox.warning(self, "提示", "该工单已达到最高升级级别")
+            return
+        
+        dialog = EscalationDialog(self, work_order_id=order_id, current_level=current_level)
+        if dialog.exec() == QDialog.Accepted:
+            data = dialog.get_data()
+            success, msg, escalation_id = self.db.add_escalation(
+                work_order_id=order_id,
+                escalation_level=data["new_level"],
+                escalated_to=data["escalate_to"],
+                escalation_reason=data["reason"]
+            )
+            if success:
+                self.db.add_work_order_history(
+                    work_order_id=order_id,
+                    action_type="escalate",
+                    operator=data["escalate_to"],
+                    details=f"工单升级至 {ESCALATION_LEVEL_NAMES.get(data['new_level'], '')}，上报给 {data['escalate_to']}",
+                    notes=data["reason"]
+                )
+                self.db.add_reminder(
+                    work_order_id=order_id,
+                    reminder_type="escalation",
+                    recipient=data["escalate_to"],
+                    content=f"工单 [{order.get('order_no', '')}] 已升级，请关注处理进度。\n升级原因：{data['reason']}",
+                    due_date=QDate.currentDate().toString("yyyy-MM-dd")
+                )
+                QMessageBox.information(self, "成功", msg)
+                self.refresh()
+            else:
+                QMessageBox.warning(self, "失败", msg)
+
+    def _on_auto_remind(self):
+        reply = QMessageBox.question(
+            self, "确认操作",
+            "确定要对所有超期工单发送自动催办提醒吗？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            count, msg = self.db.auto_send_overdue_reminders()
+            if count > 0:
+                QMessageBox.information(self, "成功", f"已向 {count} 个超期工单发送催办提醒\n{msg}")
+            else:
+                QMessageBox.information(self, "提示", msg or "当前没有超期工单")
+            self.refresh()
+
+    def _on_auto_escalate(self):
+        reply = QMessageBox.question(
+            self, "确认操作",
+            "确定要对所有超期工单执行自动升级检查吗？\n（超期3天→一级，超期7天→二级，超期14天→三级）",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            count, msg = self.db.auto_escalate_overdue()
+            if count > 0:
+                QMessageBox.information(self, "成功", f"已自动升级 {count} 个超期工单\n{msg}")
+            else:
+                QMessageBox.information(self, "提示", msg or "没有需要升级的工单")
+            self.refresh()
+
     def create_from_anomaly(self, anomaly_id: int):
         success, msg, order_id = self.db.create_work_order_from_anomaly(anomaly_id)
-        if success:
+        if success and order_id:
+            order = self.db.get_work_order(order_id)
+            if order:
+                priority = order.get("priority", "普通")
+                if priority in WORK_ORDER_NEEDS_APPROVAL_PRIORITIES:
+                    from ui.approval_panel import create_approval_for_work_order
+                    create_approval_for_work_order(self.db, order_id, priority)
+            
             QMessageBox.information(self, "成功", f"工单创建成功\n{msg}")
             self.refresh()
         else:

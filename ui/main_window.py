@@ -19,9 +19,12 @@ from ui.qc_panel import QCPanel
 from ui.anomaly_panel import AnomalyPanel
 from ui.dashboard_panel import DashboardPanel
 from ui.handling_panel import HandlingPanel
-from ui.statistics_panel import StatisticsPanel
+from ui.statistics_panel import AdvancedStatisticsPanel
 from ui.report_panel import ReportPanel
 from ui.work_order_panel import WorkOrderPanel
+from ui.user_panel import UserPanel
+from ui.approval_panel import ApprovalPanel
+from ui.route_panel import RoutePanel
 
 
 class MainWindow(QMainWindow):
@@ -36,8 +39,8 @@ class MainWindow(QMainWindow):
         self.refresh_all()
 
     def _init_ui(self):
-        self.setWindowTitle("海蚀洞滴水监测数据管理系统 v2.0")
-        self.resize(1500, 950)
+        self.setWindowTitle("海蚀洞滴水监测智能运维闭环平台 v3.0")
+        self.resize(1600, 1000)
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -60,20 +63,26 @@ class MainWindow(QMainWindow):
         self.dashboard_panel = DashboardPanel()
         self.handling_panel = HandlingPanel()
         self.work_order_panel = WorkOrderPanel()
-        self.statistics_panel = StatisticsPanel()
+        self.statistics_panel = AdvancedStatisticsPanel()
         self.report_panel = ReportPanel()
+        self.user_panel = UserPanel()
+        self.approval_panel = ApprovalPanel()
+        self.route_panel = RoutePanel()
 
-        self.tab_widget.addTab(self.cave_panel, "洞区管理")
-        self.tab_widget.addTab(self.drip_point_panel, "滴水点管理")
-        self.tab_widget.addTab(self.device_panel, "设备档案")
-        self.tab_widget.addTab(self.data_import_panel, "数据导入")
-        self.tab_widget.addTab(self.qc_panel, "数据质控")
-        self.tab_widget.addTab(self.anomaly_panel, "异常检测")
-        self.tab_widget.addTab(self.dashboard_panel, "预警看板")
-        self.tab_widget.addTab(self.handling_panel, "处理追踪")
-        self.tab_widget.addTab(self.work_order_panel, "维护巡检")
-        self.tab_widget.addTab(self.statistics_panel, "统计分析")
-        self.tab_widget.addTab(self.report_panel, "报告导出")
+        self.tab_widget.addTab(self.dashboard_panel, "🏠 预警看板")
+        self.tab_widget.addTab(self.cave_panel, "📍 洞区管理")
+        self.tab_widget.addTab(self.drip_point_panel, "💧 滴水点管理")
+        self.tab_widget.addTab(self.device_panel, "📱 设备档案")
+        self.tab_widget.addTab(self.data_import_panel, "📥 数据导入")
+        self.tab_widget.addTab(self.qc_panel, "✅ 数据质控")
+        self.tab_widget.addTab(self.anomaly_panel, "⚠️ 异常检测")
+        self.tab_widget.addTab(self.work_order_panel, "📋 维护巡检")
+        self.tab_widget.addTab(self.approval_panel, "🔍 工单审批")
+        self.tab_widget.addTab(self.route_panel, "🗺️ 巡检路线")
+        self.tab_widget.addTab(self.user_panel, "👥 用户管理")
+        self.tab_widget.addTab(self.statistics_panel, "📊 统计分析")
+        self.tab_widget.addTab(self.report_panel, "📄 报告导出")
+        self.tab_widget.addTab(self.handling_panel, "📝 处理追踪")
 
         left_layout.addWidget(self.tab_widget)
         self.splitter.addWidget(left_widget)
@@ -173,6 +182,9 @@ class MainWindow(QMainWindow):
         self.work_order_panel.data_changed.connect(self.refresh_all)
         self.statistics_panel.data_changed.connect(self.refresh_all)
         self.report_panel.data_changed.connect(self.refresh_all)
+        self.user_panel.data_changed.connect(self.refresh_all)
+        self.approval_panel.data_changed.connect(self.refresh_all)
+        self.route_panel.data_changed.connect(self.refresh_all)
 
     def _on_point_selected(self, point_id: int):
         self.current_point_id = point_id
@@ -305,23 +317,28 @@ class MainWindow(QMainWindow):
     def _show_about(self):
         QMessageBox.about(
             self, "关于",
-            "<h3>海蚀洞滴水监测数据管理系统</h3>"
-            "<p>版本: 2.0</p>"
-            "<p>用于地质和洞穴研究团队整理海蚀洞内的滴水监测数据。</p>"
-            "<p><b>主要功能:</b></p>"
+            "<h3>海蚀洞滴水监测智能运维闭环平台</h3>"
+            "<p>版本: 3.0</p>"
+            "<p>用于地质和洞穴研究团队建立从异常识别到闭环归档的高效运维体系。</p>"
+            "<p><b>核心功能:</b></p>"
             "<ul>"
-            "<li>洞区分层管理（洞区 → 子区域 → 滴水点）</li>"
-            "<li>设备档案与校准记录</li>"
-            "<li>滴水点建档与管理</li>"
-            "<li>CSV 数据导入与导入前数据质控</li>"
-            "<li>节律曲线可视化</li>"
-            "<li>季节数据对比分析</li>"
-            "<li>异常检测（断档/持续偏高/持续偏低/突变/堵塞/渗流增强）</li>"
-            "<li>异常预警看板与风险等级</li>"
-            "<li>处理记录追踪</li>"
-            "<li>按日/周/月统计分析</li>"
-            "<li>多滴水点联合分析与相关性</li>"
-            "<li>报告导出（月度/异常/联合分析）</li>"
+            "<li>🔐 <b>多角色权限管理</b>：管理人员、研究人员、现场巡检人员三级权限</li>"
+            "<li>📍 <b>洞区分层管理</b>：洞区 → 子区域 → 滴水点三级架构</li>"
+            "<li>📱 <b>设备档案</b>：设备管理与校准记录追踪</li>"
+            "<li>📥 <b>数据导入</b>：CSV 数据导入与导入前数据质控</li>"
+            "<li>⚠️ <b>智能异常检测</b>：断档/持续偏高/偏低/突变/堵塞/渗流增强</li>"
+            "<li>🏠 <b>预警看板</b>：实时异常与工单状态总览</li>"
+            "<li>📋 <b>维护巡检工单</b>：工单创建、分配、状态流转</li>"
+            "<li>🔍 <b>工单审批流程</b>：高优先级工单多级审批机制</li>"
+            "<li>🗺️ <b>巡检路线安排</b>：自定义巡检路线与分配计划</li>"
+            "<li>👥 <b>批量派单</b>：多选工单批量分配给巡检人员</li>"
+            "<li>⏰ <b>复检提醒</b>：待复检工单自动提醒机制</li>"
+            "<li>🔔 <b>超期自动催办</b>：超期工单自动发送提醒</li>"
+            "<li>🚨 <b>工单升级机制</b>：超期未处理自动升级上报</li>"
+            "<li>📊 <b>多维度统计分析</b>：按洞区、滴水点、责任人、异常类型、时间筛选</li>"
+            "<li>📈 <b>处置效率分析</b>：响应时间、处理时长、完成率统计</li>"
+            "<li>🔄 <b>重复异常点位</b>：高频异常点识别与历史追溯</li>"
+            "<li>📄 <b>报告导出</b>：月度/异常/联合分析报告生成</li>"
             "</ul>"
             "<p><b>技术栈:</b> Python + PySide6 + SQLite + Matplotlib</p>"
         )
@@ -338,8 +355,11 @@ class MainWindow(QMainWindow):
         self.dashboard_panel.refresh()
         self.handling_panel.refresh()
         self.work_order_panel.refresh()
-        self.statistics_panel.refresh_points()
+        self.statistics_panel.refresh()
         self.report_panel.refresh()
+        self.user_panel.refresh()
+        self.approval_panel.refresh()
+        self.route_panel.refresh()
 
         current_area_id = self.joint_area_combo.currentData()
         self.joint_area_combo.blockSignals(True)

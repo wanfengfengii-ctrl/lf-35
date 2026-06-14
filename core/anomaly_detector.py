@@ -23,6 +23,18 @@ ANOMALY_TYPES = {
     "continuous_low": "持续偏低",
 }
 
+ANOMALY_TYPE_NAMES = ANOMALY_TYPES
+
+ANOMALY_TYPE_COLORS = {
+    "blockage": "#d62728",
+    "increased_seepage": "#ff7f0e",
+    "sudden_change": "#ffbb78",
+    "abnormal_fluctuation": "#9467bd",
+    "data_gap": "#7f7f7f",
+    "continuous_high": "#e377c2",
+    "continuous_low": "#17becf",
+}
+
 DEVICE_STATUSES = ["在用", "停用", "维修中", "待校准"]
 HANDLING_STATUSES = ["待处理", "处理中", "已处理", "已忽略"]
 QC_SEVERITY = ["info", "warning", "error", "critical"]
@@ -35,6 +47,14 @@ ANOMALY_STATUS_COLORS = {
 }
 
 WORK_ORDER_STATUSES = ["待处理", "处理中", "待复检", "已完成", "已关闭"]
+
+WORK_ORDER_STATUS_NAMES = {
+    "待处理": "待处理",
+    "处理中": "处理中",
+    "待复检": "待复检",
+    "已完成": "已完成",
+    "已关闭": "已关闭",
+}
 
 WORK_ORDER_STATUS_COLORS = {
     "待处理": "#d62728",
@@ -60,6 +80,124 @@ WORK_ORDER_STATUS_FLOW = {
     "已完成": ["待复检", "已关闭"],
     "已关闭": ["待处理"],
 }
+
+USER_ROLES = {
+    "manager": "管理人员",
+    "researcher": "研究人员",
+    "inspector": "现场巡检人员",
+}
+
+USER_ROLE_COLORS = {
+    "manager": "#d62728",
+    "researcher": "#1f77b4",
+    "inspector": "#2ca02c",
+}
+
+USER_ROLE_PERMISSIONS = {
+    "manager": [
+        "view_all", "create_work_order", "edit_work_order", "delete_work_order",
+        "assign_work_order", "batch_assign", "approve_work_order",
+        "create_user", "edit_user", "delete_user", "manage_permissions",
+        "create_route", "edit_route", "delete_route", "assign_route",
+        "view_statistics", "export_report", "escalate_work_order",
+        "view_history", "manage_system"
+    ],
+    "researcher": [
+        "view_all", "create_work_order", "edit_own_work_order",
+        "view_statistics", "export_report", "view_history",
+        "view_anomaly_data", "import_data"
+    ],
+    "inspector": [
+        "view_assigned", "update_work_order_status", "add_inspection_record",
+        "upload_attachment", "view_own_history", "view_route"
+    ],
+}
+
+APPROVAL_STATUSES = ["pending", "approved", "rejected"]
+APPROVAL_STATUS_NAMES = {
+    "pending": "待审批",
+    "approved": "已通过",
+    "rejected": "已驳回",
+}
+APPROVAL_STATUS_COLORS = {
+    "pending": "#ff7f0e",
+    "approved": "#2ca02c",
+    "rejected": "#d62728",
+}
+
+APPROVAL_STEPS = {
+    1: "一级审批",
+    2: "二级审批",
+    3: "三级审批",
+}
+
+ESCALATION_LEVELS = {
+    1: {"name": "Level 1", "description": "超期3天，通知责任人", "threshold_days": 3},
+    2: {"name": "Level 2", "description": "超期7天，通知部门主管", "threshold_days": 7},
+    3: {"name": "Level 3", "description": "超期14天，通知管理层", "threshold_days": 14},
+}
+
+ESCALATION_LEVEL_NAMES = {
+    0: "普通",
+    1: "一级升级",
+    2: "二级升级",
+    3: "三级升级",
+}
+
+ESCALATION_LEVEL_COLORS = {
+    1: "#ffbb78",
+    2: "#ff7f0e",
+    3: "#d62728",
+}
+
+REMINDER_TYPES = {
+    "overdue": "超期提醒",
+    "recheck": "复检提醒",
+    "escalation": "升级提醒",
+    "assignment": "派单提醒",
+    "approval": "审批提醒",
+}
+
+REMINDER_TYPE_NAMES = REMINDER_TYPES
+
+REMINDER_TYPE_COLORS = {
+    "overdue": "#d62728",
+    "recheck": "#9467bd",
+    "escalation": "#ff7f0e",
+    "assignment": "#1f77b4",
+    "approval": "#2ca02c",
+}
+
+ROUTE_ASSIGNMENT_STATUSES = ["pending", "in_progress", "completed", "cancelled"]
+ROUTE_ASSIGNMENT_STATUS_NAMES = {
+    "pending": "待执行",
+    "in_progress": "进行中",
+    "completed": "已完成",
+    "cancelled": "已取消",
+}
+ROUTE_ASSIGNMENT_STATUS_COLORS = {
+    "pending": "#ff7f0e",
+    "in_progress": "#1f77b4",
+    "completed": "#2ca02c",
+    "cancelled": "#7f7f7f",
+}
+
+WORK_ORDER_ACTION_TYPES = {
+    "create": "创建工单",
+    "edit": "编辑工单",
+    "status_change": "状态变更",
+    "assign": "分配工单",
+    "batch_assign": "批量派单",
+    "approval": "审批",
+    "escalate": "工单升级",
+    "recheck": "复检",
+    "close": "关闭工单",
+    "delete": "删除工单",
+    "add_attachment": "上传附件",
+    "add_inspection": "添加巡检记录",
+}
+
+WORK_ORDER_NEEDS_APPROVAL_PRIORITIES = ["紧急", "高"]
 
 
 @dataclass

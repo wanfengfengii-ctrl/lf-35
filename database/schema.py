@@ -252,6 +252,163 @@ CREATE INDEX IF NOT EXISTS idx_inspection_order
 ON inspection_records(work_order_id, inspect_time)
 """
 
+CREATE_TABLE_USERS = """
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    real_name TEXT NOT NULL,
+    password TEXT NOT NULL,
+    role TEXT NOT NULL,
+    phone TEXT,
+    email TEXT,
+    department TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    last_login TEXT
+)
+"""
+
+CREATE_TABLE_USER_PERMISSIONS = """
+CREATE TABLE IF NOT EXISTS user_permissions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    permission TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE(user_id, permission)
+)
+"""
+
+CREATE_TABLE_APPROVAL_RECORDS = """
+CREATE TABLE IF NOT EXISTS approval_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    work_order_id INTEGER NOT NULL,
+    approver_id INTEGER,
+    approver_name TEXT,
+    approval_step INTEGER NOT NULL DEFAULT 1,
+    approval_status TEXT NOT NULL DEFAULT 'pending',
+    approval_opinion TEXT,
+    approval_time TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (work_order_id) REFERENCES maintenance_work_orders(id) ON DELETE CASCADE
+)
+"""
+
+CREATE_TABLE_INSPECTION_ROUTES = """
+CREATE TABLE IF NOT EXISTS inspection_routes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    route_name TEXT NOT NULL,
+    route_code TEXT NOT NULL UNIQUE,
+    area_id INTEGER,
+    description TEXT,
+    created_by TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (area_id) REFERENCES cave_areas(id) ON DELETE SET NULL
+)
+"""
+
+CREATE_TABLE_ROUTE_POINTS = """
+CREATE TABLE IF NOT EXISTS route_points (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    route_id INTEGER NOT NULL,
+    drip_point_id INTEGER NOT NULL,
+    sequence INTEGER NOT NULL DEFAULT 0,
+    estimated_duration INTEGER,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (route_id) REFERENCES inspection_routes(id) ON DELETE CASCADE,
+    FOREIGN KEY (drip_point_id) REFERENCES drip_points(id) ON DELETE CASCADE,
+    UNIQUE(route_id, drip_point_id)
+)
+"""
+
+CREATE_TABLE_ROUTE_ASSIGNMENTS = """
+CREATE TABLE IF NOT EXISTS route_assignments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    route_id INTEGER NOT NULL,
+    assignee TEXT NOT NULL,
+    plan_date TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    actual_start_time TEXT,
+    actual_end_time TEXT,
+    completed_count INTEGER DEFAULT 0,
+    total_count INTEGER DEFAULT 0,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (route_id) REFERENCES inspection_routes(id) ON DELETE CASCADE
+)
+"""
+
+CREATE_TABLE_REMINDER_RECORDS = """
+CREATE TABLE IF NOT EXISTS reminder_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    work_order_id INTEGER NOT NULL,
+    reminder_type TEXT NOT NULL,
+    reminder_content TEXT,
+    recipient TEXT,
+    reminder_time TEXT NOT NULL,
+    is_read INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (work_order_id) REFERENCES maintenance_work_orders(id) ON DELETE CASCADE
+)
+"""
+
+CREATE_TABLE_WORK_ORDER_ESCALATIONS = """
+CREATE TABLE IF NOT EXISTS work_order_escalations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    work_order_id INTEGER NOT NULL,
+    escalation_level INTEGER NOT NULL DEFAULT 1,
+    escalation_reason TEXT,
+    escalated_to TEXT,
+    escalated_by TEXT,
+    escalation_time TEXT NOT NULL,
+    response TEXT,
+    response_time TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (work_order_id) REFERENCES maintenance_work_orders(id) ON DELETE CASCADE
+)
+"""
+
+CREATE_TABLE_WORK_ORDER_HISTORY = """
+CREATE TABLE IF NOT EXISTS work_order_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    work_order_id INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    old_value TEXT,
+    new_value TEXT,
+    operator TEXT,
+    operation_time TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    remarks TEXT,
+    FOREIGN KEY (work_order_id) REFERENCES maintenance_work_orders(id) ON DELETE CASCADE
+)
+"""
+
+CREATE_INDEX_USER_ROLE = """
+CREATE INDEX IF NOT EXISTS idx_user_role
+ON users(role, status)
+"""
+
+CREATE_INDEX_APPROVAL_ORDER = """
+CREATE INDEX IF NOT EXISTS idx_approval_order
+ON approval_records(work_order_id, approval_status)
+"""
+
+CREATE_INDEX_REMINDER_ORDER = """
+CREATE INDEX IF NOT EXISTS idx_reminder_order
+ON reminder_records(work_order_id, is_read)
+"""
+
+CREATE_INDEX_ESCALATION_ORDER = """
+CREATE INDEX IF NOT EXISTS idx_escalation_order
+ON work_order_escalations(work_order_id, escalation_level)
+"""
+
+CREATE_INDEX_ROUTE_ASSIGNEE = """
+CREATE INDEX IF NOT EXISTS idx_route_assignee
+ON route_assignments(assignee, plan_date, status)
+"""
+
 ALL_TABLES = [
     CREATE_TABLE_CAVE_AREAS,
     CREATE_TABLE_CAVE_ZONES,
@@ -266,10 +423,24 @@ ALL_TABLES = [
     CREATE_TABLE_MAINTENANCE_WORK_ORDERS,
     CREATE_TABLE_INSPECTION_RECORDS,
     CREATE_TABLE_WORK_ORDER_ATTACHMENTS,
+    CREATE_TABLE_USERS,
+    CREATE_TABLE_USER_PERMISSIONS,
+    CREATE_TABLE_APPROVAL_RECORDS,
+    CREATE_TABLE_INSPECTION_ROUTES,
+    CREATE_TABLE_ROUTE_POINTS,
+    CREATE_TABLE_ROUTE_ASSIGNMENTS,
+    CREATE_TABLE_REMINDER_RECORDS,
+    CREATE_TABLE_WORK_ORDER_ESCALATIONS,
+    CREATE_TABLE_WORK_ORDER_HISTORY,
     CREATE_INDEX_MONITORING_TIME,
     CREATE_INDEX_ANOMALY_STATUS,
     CREATE_INDEX_CALIBRATION_DEVICE,
     CREATE_INDEX_WORK_ORDER_STATUS,
     CREATE_INDEX_WORK_ORDER_TIME,
     CREATE_INDEX_INSPECTION_ORDER,
+    CREATE_INDEX_USER_ROLE,
+    CREATE_INDEX_APPROVAL_ORDER,
+    CREATE_INDEX_REMINDER_ORDER,
+    CREATE_INDEX_ESCALATION_ORDER,
+    CREATE_INDEX_ROUTE_ASSIGNEE,
 ]

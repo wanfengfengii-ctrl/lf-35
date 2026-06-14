@@ -6,6 +6,10 @@ from .device_panel import DevicePanel
 from .qc_panel import QCPanel
 from .dashboard_panel import DashboardPanel
 from .handling_panel import HandlingPanel
-from .statistics_panel import StatisticsPanel
+from .statistics_panel import AdvancedStatisticsPanel
 from .report_panel import ReportPanel
 from .main_window import MainWindow
+from .work_order_panel import WorkOrderPanel
+from .user_panel import UserPanel
+from .approval_panel import ApprovalPanel
+from .route_panel import RoutePanel
